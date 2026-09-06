@@ -1,0 +1,36 @@
+# stock-watchlist-notifier
+
+로컬 PC가 꺼져 있어도 동작하는, 관심종목 뉴스 요약 + 미국 시장 분위기 요약을 카카오톡으로 보내는
+독립 알림 파이프라인 (GitHub Actions). 별도 프로젝트(`opencode`, 비공개)의 실제 포트폴리오 판단
+파이프라인과는 완전히 분리되어 있으며, 여기에는 **종목코드+이름**만 담긴 `watchlist.json`과
+알림 스크립트만 둔다 — 비중·수량·평단·손익 등 민감 수치는 절대 커밋하지 않는다.
+
+## 구성
+
+- `watchlist.json` — 관심종목(코드+이름만). `opencode` 프로젝트의
+  `scripts/Publish-Watchlist.ps1 -Push`가 실제 보유 스냅샷에서 상위 N종목을 뽑아 이 파일만
+  덮어써서 커밋한다. 이 저장소 자체는 어떻게 종목이 선정됐는지 알지 못한다.
+- `scripts/kakao_client.py` — 카카오 "나에게 보내기" REST API 직접 호출(리프레시 토큰 →
+  access token → 메시지 발송). MCP를 쓰지 않는다(무인 CI 환경 전제).
+- `scripts/notify_kr_watchlist.py` — `watchlist.json`의 종목마다 Claude(Haiku)+웹서치로 최근
+  뉴스를 요약해 종목당 카카오 메시지 1건씩 발송. 06:30 KST 실행.
+- `scripts/notify_us_market.py` — 미국 시장 전반 분위기 요약을 카카오 메시지 1건으로 발송.
+  08:00 KST 실행.
+- `scripts/kakao_get_refresh_token.py` — 최초 1회, 로컬에서 직접 실행하는 OAuth 인가 코드 교환
+  헬퍼(브라우저 로그인 필요). CI에서는 쓰지 않는다.
+
+## 필요한 GitHub Actions Secrets
+
+| Secret | 설명 |
+|---|---|
+| `ANTHROPIC_API_KEY` | Claude API 키 |
+| `KAKAO_REST_API_KEY` | 카카오 Developers 앱의 REST API 키 |
+| `KAKAO_REFRESH_TOKEN` | `kakao_get_refresh_token.py`로 최초 발급받은 리프레시 토큰 |
+
+리프레시 토큰은 약 60일 후 만료될 수 있다 — **수동 갱신** 전략(자동 로테이션 없음). 발송이
+인증 오류로 실패하면 `kakao_get_refresh_token.py`를 로컬에서 다시 실행해 위 Secret을
+갱신한다.
+
+## 수동 실행/테스트
+
+두 워크플로우 모두 `workflow_dispatch`로 GitHub Actions 탭에서 수동 트리거 가능.
