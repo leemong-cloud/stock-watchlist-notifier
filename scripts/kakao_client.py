@@ -13,6 +13,7 @@ KAKAO_REFRESH_TOKEN secret by hand.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -22,6 +23,16 @@ KAUTH_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 KAPI_MEMO_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 
 MAX_MESSAGE_CHARS = 190  # stays safely under the default "text" template's ~200-char limit
+
+DEFAULT_LINK_URL = "https://github.com/leemong-cloud/stock-watchlist-notifier"
+
+# Static icon committed to this repo (see assets/news-icon.png) -- the "list" template requires an
+# image_url per item, and hosting our own via raw.githubusercontent.com avoids depending on a
+# third-party image URL that could disappear.
+NEWS_ICON_URL = (
+    "https://raw.githubusercontent.com/leemong-cloud/stock-watchlist-notifier/main/assets/news-icon.png"
+)
+NEWS_ICON_SIZE = 512
 
 
 class KakaoAuthError(RuntimeError):
@@ -70,7 +81,7 @@ def get_access_token() -> str:
     return access_token
 
 
-def send_text(access_token: str, message: str, link_url: str = "https://github.com/leemong-cloud/stock-watchlist-notifier") -> None:
+def send_text(access_token: str, message: str, link_url: str = DEFAULT_LINK_URL) -> None:
     text = message.strip()
     if len(text) > MAX_MESSAGE_CHARS:
         text = text[: MAX_MESSAGE_CHARS - 1].rstrip() + "…"
@@ -84,7 +95,7 @@ def send_text(access_token: str, message: str, link_url: str = "https://github.c
     resp = requests.post(
         KAPI_MEMO_URL,
         headers={"Authorization": f"Bearer {access_token}"},
-        data={"template_object": __import__("json").dumps(template_object, ensure_ascii=False)},
+        data={"template_object": json.dumps(template_object, ensure_ascii=False)},
         timeout=30,
     )
     if resp.status_code != 200:
@@ -96,3 +107,49 @@ def send_kakao_message(message: str) -> None:
     to skip-and-continue or hard-fail)."""
     token = get_access_token()
     send_text(token, message)
+
+
+def send_list(
+    access_token: str,
+    header_title: str,
+    items: list[dict],
+    header_link_url: str = DEFAULT_LINK_URL,
+) -> None:
+    """Kakao "list" default template -- unlike "text", each content item carries its OWN link, so
+    a single KakaoTalk bubble can point each stock at a different article. Kakao requires 1-3
+    items and an image_url per item (see NEWS_ICON_URL)."""
+    if not 1 <= len(items) <= 3:
+        raise ValueError(f"Kakao list 템플릿은 항목 1~3개만 지원합니다 (받은 개수: {len(items)})")
+
+    template_object = {
+        "object_type": "list",
+        "header_title": header_title,
+        "header_link": {"web_url": header_link_url, "mobile_web_url": header_link_url},
+        "contents": [
+            {
+                "title": item["title"],
+                "description": item["description"],
+                "image_url": NEWS_ICON_URL,
+                "image_width": NEWS_ICON_SIZE,
+                "image_height": NEWS_ICON_SIZE,
+                "link": {"web_url": item["link_url"], "mobile_web_url": item["link_url"]},
+            }
+            for item in items
+        ],
+    }
+
+    resp = requests.post(
+        KAPI_MEMO_URL,
+        headers={"Authorization": f"Bearer {access_token}"},
+        data={"template_object": json.dumps(template_object, ensure_ascii=False)},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise KakaoSendError(f"카카오 목록 메시지 발송 실패 (HTTP {resp.status_code}): {resp.text[:500]}")
+
+
+def send_kakao_list_message(header_title: str, items: list[dict]) -> None:
+    """Convenience wrapper: refresh token -> send_list. Same failure contract as
+    send_kakao_message (raises, caller decides skip-vs-fail)."""
+    token = get_access_token()
+    send_list(token, header_title, items)
