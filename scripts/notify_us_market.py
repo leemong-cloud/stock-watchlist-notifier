@@ -23,6 +23,8 @@ PROMPT = (
     "확인 가능한 정보가 없으면 정확히 '최신 지수 정보 확인 실패'라고만 답해."
 )
 
+FAILURE_SENTINEL = "최신 지수 정보 확인 실패"
+
 
 def main() -> int:
     if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
@@ -31,6 +33,8 @@ def main() -> int:
 
     try:
         summary = run_claude(PROMPT) or "요약 생성 실패"
+        if summary == FAILURE_SENTINEL:
+            summary = run_claude(PROMPT) or "요약 생성 실패"  # WebSearch가 그날따라 못 찾은 경우 1회만 재시도
     except ClaudeCliError as exc:
         print(f"FAIL(claude): {exc}", file=sys.stderr)
         return 1
