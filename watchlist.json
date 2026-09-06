@@ -1,5 +1,38 @@
 {
-  "asOf": null,
-  "generatedAt": null,
-  "stocks": []
+    "asOf":  "2026-09-05",
+    "generatedAt":  "2026-09-06T09:56:11.2857231+09:00",
+    "stocks":  [
+                   {
+                       "symbol":  "068270",
+                       "name":  "셀트리온"
+                   },
+                   {
+                       "symbol":  "005930",
+                       "name":  "삼성전자"
+                   },
+                   {
+                       "symbol":  "005380",
+                       "name":  "현대차"
+                   },
+                   {
+                       "symbol":  "328130",
+                       "name":  "루닛"
+                   },
+                   {
+                       "symbol":  "035900",
+                       "name":  "JYP Ent."
+                   },
+                   {
+                       "symbol":  "047040",
+                       "name":  "대우건설"
+                   },
+                   {
+                       "symbol":  "042700",
+                       "name":  "한미반도체"
+                   },
+                   {
+                       "symbol":  "010060",
+                       "name":  "OCI홀딩스"
+                   }
+               ]
 }
