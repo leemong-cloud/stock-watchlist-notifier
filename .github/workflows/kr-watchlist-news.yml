@@ -2,7 +2,7 @@ name: KR watchlist news -> KakaoTalk
 
 on:
   schedule:
-    - cron: '30 21 * * *'  # 21:30 UTC = 06:30 KST (next calendar day)
+    - cron: '20 21 * * *'  # 21:20 UTC = 06:20 KST (next calendar day) -- ~7min WebSearch pass lands before 06:30
   workflow_dispatch: {}
 
 jobs:

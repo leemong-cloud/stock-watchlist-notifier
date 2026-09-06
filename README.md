@@ -15,8 +15,10 @@
   이 자동화 자체는 별도 API 사용료가 들지 않는다.
 - `scripts/kakao_client.py` — 카카오 "나에게 보내기" REST API 직접 호출(리프레시 토큰 →
   access token → 메시지 발송). MCP를 쓰지 않는다(무인 CI 환경 전제).
-- `scripts/notify_kr_watchlist.py` — `watchlist.json`의 종목마다 Claude(Haiku)+웹서치로 최근
-  뉴스를 요약해 종목당 카카오 메시지 1건씩 발송. 06:30 KST 실행.
+- `scripts/notify_kr_watchlist.py` — `watchlist.json`의 종목마다 Claude(Haiku)+웹서치로 지난
+  24시간 이내 뉴스를 한 줄 요약+호재/부정/중립 판정으로 확인한 뒤, 뉴스가 있는 종목만 모아
+  **카카오 메시지 1건으로 묶어** 발송(뉴스 없는 종목은 언급 안 함). 06:20 KST 실행(트리거~발송까지
+  약 7분 걸려 06:30 목표 시각 전 도착).
 - `scripts/notify_us_market.py` — 미국 시장 전반 분위기 요약을 카카오 메시지 1건으로 발송.
   08:00 KST 실행.
 - `scripts/kakao_get_refresh_token.py` — 최초 1회, 로컬에서 직접 실행하는 OAuth 인가 코드 교환
