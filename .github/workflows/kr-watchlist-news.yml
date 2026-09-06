@@ -3,7 +3,12 @@ name: KR watchlist news -> KakaoTalk
 on:
   schedule:
     - cron: '20 21 * * *'  # 21:20 UTC = 06:20 KST (next calendar day) -- ~7min WebSearch pass lands before 06:30
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      test_date:
+        description: '테스트용 기준 날짜(KST, YYYY-MM-DD) -- 비워두면 실제 실행 시각 사용'
+        required: false
+        default: ''
 
 jobs:
   notify:
@@ -23,3 +28,4 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
+          TEST_DATE_KST: ${{ github.event.inputs.test_date }}

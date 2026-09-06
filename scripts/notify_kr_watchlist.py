@@ -75,7 +75,14 @@ def main() -> int:
         print("CLAUDE_CODE_OAUTH_TOKEN이 설정되지 않았습니다.", file=sys.stderr)
         return 1
 
-    now_kst = datetime.now(KST)
+    test_date = os.environ.get("TEST_DATE_KST", "").strip()
+    if test_date:
+        now_kst = datetime.strptime(test_date, "%Y-%m-%d").replace(
+            hour=23, minute=59, tzinfo=KST
+        )
+        print(f"TEST_DATE_KST 오버라이드: {test_date} 기준으로 실행합니다 (실 운영 스케줄에는 영향 없음)")
+    else:
+        now_kst = datetime.now(KST)
     digest_lines = []
     failures = []
     for stock in stocks:
