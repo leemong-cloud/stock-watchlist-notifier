@@ -4,15 +4,18 @@ Reads watchlist.json (symbol+name only -- committed by the opencode project's
 Publish-Watchlist.ps1, which derives it from the user's actual TOSS holdings but deliberately
 strips weight/quantity/avgPrice before it ever reaches this public repo).
 
-For each stock, asks Claude (Haiku, via the Claude Code CLI's built-in WebSearch tool -- see
+For each stock, asks Claude (via the Claude Code CLI's built-in WebSearch tool -- see
 claude_cli.py) for material news from the last 24 hours (anchored to the run's actual KST
-clock, not a vague "24~48h" window) across BOTH domestic and foreign (외신) coverage, reduced to
-a one-line summary + a 호재/부정/중립 verdict + the URL of one representative article actually
-found via search. No numeric claim is accepted without the model having actually searched for
-it, and no item is built without a real URL -- if Claude can't pin down a confirmed article link,
-that's treated the same as "no material news" (NONE_SENTINEL) rather than guessing a link. A
-stock with no material news is silently omitted from the digest -- the user asked not to spell
-out "no news" per stock.
+clock, not a vague "24~48h" window -- except Monday runs, which widen to 72h so weekend news
+isn't silently missed, see lookback_hours_for) across BOTH domestic and foreign (외신) coverage,
+reduced to a one-line summary + a 호재/부정/중립 verdict + the URL of one representative article
+actually found via search. No numeric claim is accepted without the model having actually
+searched for it, and no item is built without a real URL -- if Claude can't pin down a confirmed
+article link, that's treated the same as "no material news" (NONE_SENTINEL) rather than guessing
+a link. A stock with no material news is silently omitted from the digest -- the user asked not
+to spell out "no news" per stock. The model's raw per-stock response is always printed to stderr
+(_log_raw) so a day where everything gets skipped can actually be diagnosed after the fact
+(2026-09-06: 8/8 stocks skipped with zero visibility into why -- this was previously unrecoverable).
 
 All per-stock results are collected first. Kakao's "list" default template lets each item carry
 its own link (unlike "text", which supports only one link per whole message), so tapping a
@@ -22,9 +25,9 @@ with all 8 watchlist stocks having news, is 3 messages). A quiet day with zero i
 the old plain "text" message ("특이 뉴스 없음") since there's nothing to link.
 
 Runs on a daily schedule regardless of weekday/holiday (see .github/workflows/kr-watchlist-news.yml,
-scheduled ~06:20 KST so the ~7min per-stock WebSearch pass lands before the 06:30 send target) --
-a quiet digest on a non-trading day is harmless, and a KR market holiday calendar would be
-overengineering for this use case.
+scheduled ~05:50 KST to leave margin for GitHub Actions' own `schedule`-trigger queuing delay
+before the 06:30 send target -- see README) -- a quiet digest on a non-trading day is harmless,
+and a KR market holiday calendar would be overengineering for this use case.
 """
 from __future__ import annotations
 
@@ -48,10 +51,24 @@ NONE_SENTINEL = "NONE"
 LIST_CHUNK_SIZE = 3  # Kakao "list" template supports 1-3 content items per message
 
 
+def lookback_hours_for(now_kst: datetime) -> int:
+    """Monday runs need to look back across the weekend, not just 24h -- a plain 24h window on a
+    Monday morning run only reaches back into Sunday and silently misses Saturday/Friday-evening
+    news that accumulated while the market was closed. No KR holiday calendar involved (the
+    project deliberately avoids that, see README) -- this is a pure day-of-week fact."""
+    return 72 if now_kst.weekday() == 0 else 24
+
+
 def summarize_stock(symbol: str, name: str, now_kst: datetime) -> str:
+    hours = lookback_hours_for(now_kst)
+    window_note = (
+        f"오늘이 월요일이라 주말 동안 나온 뉴스까지 포함해서 지난 {hours}시간(주말 포함) 이내"
+        if hours != 24
+        else f"지난 {hours}시간 이내"
+    )
     prompt = (
-        f"지금은 {now_kst.strftime('%Y-%m-%d %H:%M')} (한국시간) 기준이야. "
-        f"{name}({symbol}) 관련, 이 시점으로부터 지난 24시간 이내에 나온 국내 뉴스와 해외(외신) "
+        f"지금은 {now_kst.strftime('%Y-%m-%d %H:%M')} (한국시간, {['월','화','수','목','금','토','일'][now_kst.weekday()]}요일) 기준이야. "
+        f"{name}({symbol}) 관련, 이 시점으로부터 {window_note}에 나온 국내 뉴스와 해외(외신) "
         "뉴스를 모두 웹 검색으로 확인해서, 그중 투자자에게 중요한 것만 알려줘. 중요한 뉴스가 있으면 "
         "다른 말 없이 정확히 이 형식으로만 답해: <한 줄 요약(30자 이내)>|<호재 또는 부정 또는 중립 중 "
         "하나>|<그 뉴스를 확인한 대표 기사 1건의 정확한 URL(마크다운 링크 문법 금지, 순수 URL 문자열만)>. "
@@ -60,6 +77,14 @@ def summarize_stock(symbol: str, name: str, now_kst: datetime) -> str:
         f"정확히 '{NONE_SENTINEL}'이라고만 답해."
     )
     return run_claude(prompt) or NONE_SENTINEL
+
+
+def _log_raw(symbol: str, name: str, raw: str) -> None:
+    """Print the model's raw response to the workflow log (stderr) so a SKIP can be told apart
+    from a real "no news" vs a format/grounding failure -- previously nothing was logged, so a
+    day where every stock skipped was completely unverifiable (2026-09-06)."""
+    flat = " ".join(raw.split())
+    print(f"RAW  {symbol} {name}: {flat[:300]}", file=sys.stderr)
 
 
 def parse_verdict_line(raw: str) -> tuple[str, str, str] | None:
@@ -111,6 +136,7 @@ def main() -> int:
             print(f"FAIL(claude) {symbol} {name}: {exc}", file=sys.stderr)
             failures.append(symbol)
             continue
+        _log_raw(symbol, name, raw)
 
         parsed = parse_verdict_line(raw)
         if parsed is None:

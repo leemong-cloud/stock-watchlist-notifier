@@ -2,7 +2,12 @@ name: KR watchlist news -> KakaoTalk
 
 on:
   schedule:
-    - cron: '20 21 * * *'  # 21:20 UTC = 06:20 KST (next calendar day) -- ~7min WebSearch pass lands before 06:30
+    - cron: '50 20 * * *'  # 20:50 UTC = 05:50 KST (next calendar day) -- moved earlier from 06:20
+                            # and off a round minute; GH Actions `schedule` queuing delayed the
+                            # first live run by ~95min (2026-09-06 -> landed 07:55 KST instead of
+                            # 06:20), so this buys margin but isn't a guarantee -- see README. The
+                            # run itself (sonnet WebSearch x8 stocks) now takes longer than the old
+                            # ~7min haiku pass, so don't shave this buffer down further.
   workflow_dispatch:
     inputs:
       test_date:
