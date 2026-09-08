@@ -20,12 +20,14 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 from claude_cli import ClaudeCliError, run_claude
+from dedup_guard import already_dispatched_today
 from kakao_client import KakaoAuthError, KakaoSendError, send_kakao_message
 
 KST = timezone(timedelta(hours=9))
 _WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
 
 FAILURE_SENTINEL = "최신 지수 정보 확인 실패"
+WORKFLOW_FILE = "us-market-mood.yml"
 
 
 def build_prompt(now_kst: datetime) -> str:
@@ -37,8 +39,9 @@ def build_prompt(now_kst: datetime) -> str:
         "(주말 또는 공휴일)인지 확인하고, 휴장일이면 그 사실과 함께 실제로 마감이 있었던 가장 최근 "
         "날짜를 명시한 뒤 그날의 결과를 요약해 -- 오래된 뉴스 기사의 날짜를 오늘 마감으로 착각하지 "
         "말고 반드시 검색 결과에 실제로 찍힌 날짜를 확인해서 말해. 한국 투자자가 참고할 만한 미국 "
-        "증시 전반 분위기(주요 이슈, 눈에 띄는 업종/종목 동향)도 포함해서 한국어로 4문장 이내, 180자 "
-        "이내로 답해(카카오톡 메시지로 바로 보낼 수 있는 분량). 확인되지 않은 수치는 추측하지 말고, "
+        "증시 전반 분위기(주요 이슈, 눈에 띄는 업종/종목 동향)도 포함해서 한국어로 4문장 이내, 160자 "
+        "이내로 답해(맨 앞에 붙는 '[미국장 분위기]' 헤더를 포함해 카카오톡 메시지 한 건에 바로 들어갈 "
+        "분량이니 여유 있게 짧게). 확인되지 않은 수치는 추측하지 말고, "
         f"확인 가능한 정보가 없으면 정확히 '{FAILURE_SENTINEL}'라고만 답해."
     )
 
@@ -54,6 +57,10 @@ def main() -> int:
         print(f"TEST_DATE_KST 오버라이드: {test_date} 기준으로 실행합니다 (실 운영 스케줄에는 영향 없음)")
     else:
         now_kst = datetime.now(KST)
+
+    if already_dispatched_today(WORKFLOW_FILE, now_kst):
+        return 0
+
     prompt = build_prompt(now_kst)
 
     try:

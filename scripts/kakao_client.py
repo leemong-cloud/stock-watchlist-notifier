@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from urllib.parse import quote
 
 import requests
 
@@ -23,8 +24,44 @@ KAUTH_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 KAPI_MEMO_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 
 MAX_MESSAGE_CHARS = 190  # stays safely under the default "text" template's ~200-char limit
+LIST_DESCRIPTION_CHARS = 76  # defensive approximation of Kakao's list-item "4 lines" display cap
+LIST_TITLE_CHARS = 40
 
 DEFAULT_LINK_URL = "https://github.com/leemong-cloud/stock-watchlist-notifier"
+
+# Kakao's default template only activates a link's tap target when its domain is registered
+# under the app's [앱 설정] > [플랫폼] in the Kakao Developers console (confirmed via official
+# docs: developers.kakao.com/docs/latest/ko/message-template/default, devtalk.kakao.com/t/topic/112581).
+# Per-article news URLs point at a different domain every day (Naver/Chosun/Hankyung/...), so none
+# of them can ever be pre-registered -- routing every link through this repo's own fixed GitHub
+# Pages domain (registered once) is what makes per-article tap-to-open actually work.
+REDIRECT_GATEWAY_URL = "https://leemong-cloud.github.io/stock-watchlist-notifier/go.html"
+
+
+def build_redirect_link(article_url: str) -> str:
+    """Wrap an arbitrary external article URL so Kakao sees only this repo's registered domain."""
+    return f"{REDIRECT_GATEWAY_URL}?u={quote(article_url, safe='')}"
+
+
+def _trim_sentence_safe(text: str, limit: int) -> str:
+    """Trim to `limit` chars, preferring a sentence/word boundary over a mid-word hard cut so a
+    truncated Kakao message doesn't end mid-syllable. Falls back to a hard cut + ellipsis when no
+    good boundary exists within the limit."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    window = text[:limit]
+    best = -1
+    for punct in (".", "!", "?", "다", "요"):
+        idx = window.rfind(punct)
+        if idx > best:
+            best = idx
+    if best >= limit * 0.5:  # only trust a boundary that isn't suspiciously early
+        return window[: best + 1]
+    space_idx = window.rfind(" ")
+    if space_idx >= limit * 0.5:
+        return window[:space_idx].rstrip() + "…"
+    return window[: limit - 1].rstrip() + "…"
 
 # Static icon committed to this repo (see assets/news-icon.png) -- the "list" template requires an
 # image_url per item, and hosting our own via raw.githubusercontent.com avoids depending on a
@@ -82,9 +119,7 @@ def get_access_token() -> str:
 
 
 def send_text(access_token: str, message: str, link_url: str = DEFAULT_LINK_URL) -> None:
-    text = message.strip()
-    if len(text) > MAX_MESSAGE_CHARS:
-        text = text[: MAX_MESSAGE_CHARS - 1].rstrip() + "…"
+    text = _trim_sentence_safe(message, MAX_MESSAGE_CHARS)
 
     template_object = {
         "object_type": "text",
@@ -127,8 +162,8 @@ def send_list(
         "header_link": {"web_url": header_link_url, "mobile_web_url": header_link_url},
         "contents": [
             {
-                "title": item["title"],
-                "description": item["description"],
+                "title": _trim_sentence_safe(item["title"], LIST_TITLE_CHARS),
+                "description": _trim_sentence_safe(item["description"], LIST_DESCRIPTION_CHARS),
                 "image_url": NEWS_ICON_URL,
                 "image_width": NEWS_ICON_SIZE,
                 "image_height": NEWS_ICON_SIZE,

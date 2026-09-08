@@ -38,12 +38,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from claude_cli import ClaudeCliError, run_claude
+from dedup_guard import already_dispatched_today
 from kakao_client import (
     KakaoAuthError,
     KakaoSendError,
+    build_redirect_link,
     send_kakao_list_message,
     send_kakao_message,
 )
+
+WORKFLOW_FILE = "kr-watchlist-news.yml"
 
 WATCHLIST_PATH = Path(__file__).resolve().parent.parent / "watchlist.json"
 KST = timezone(timedelta(hours=9))
@@ -59,14 +63,14 @@ def lookback_hours_for(now_kst: datetime) -> int:
     return 72 if now_kst.weekday() == 0 else 24
 
 
-def summarize_stock(symbol: str, name: str, now_kst: datetime) -> str:
+def _build_stock_prompt(symbol: str, name: str, now_kst: datetime) -> str:
     hours = lookback_hours_for(now_kst)
     window_note = (
         f"오늘이 월요일이라 주말 동안 나온 뉴스까지 포함해서 지난 {hours}시간(주말 포함) 이내"
         if hours != 24
         else f"지난 {hours}시간 이내"
     )
-    prompt = (
+    return (
         f"지금은 {now_kst.strftime('%Y-%m-%d %H:%M')} (한국시간, {['월','화','수','목','금','토','일'][now_kst.weekday()]}요일) 기준이야. "
         f"{name}({symbol}) 관련, 이 시점으로부터 {window_note}에 나온 국내 뉴스와 해외(외신) "
         "뉴스를 모두 웹 검색으로 확인해서, 그중 투자자에게 중요한 것만 알려줘. 중요한 뉴스가 있으면 "
@@ -75,6 +79,22 @@ def summarize_stock(symbol: str, name: str, now_kst: datetime) -> str:
         "URL은 웹 검색으로 실제 확인한 기사의 링크여야 하며 절대 추측하거나 지어내지 마라. "
         f"확인된 중요 뉴스가 없거나, 있어도 확실한 원문 URL을 확인 못 했으면 절대 추측하지 말고 "
         f"정확히 '{NONE_SENTINEL}'이라고만 답해."
+    )
+
+
+def summarize_stock(symbol: str, name: str, now_kst: datetime) -> str:
+    return run_claude(_build_stock_prompt(symbol, name, now_kst)) or NONE_SENTINEL
+
+
+def retry_stock_strict(symbol: str, name: str, now_kst: datetime) -> str:
+    """Re-asks with an added strict-format reminder -- used only when the first response wasn't a
+    clean NONE_SENTINEL match but also didn't parse as 3 valid pipe-separated fields, i.e. the
+    model most likely had real news but drifted from the required format (2026-09-08: this was
+    silently dropping stocks like a format violation would look identical to genuine "no news")."""
+    prompt = _build_stock_prompt(symbol, name, now_kst) + (
+        " 방금 전 답변 형식이 올바르지 않았어. 다시 답할 때는 절대 다른 말을 덧붙이지 말고 "
+        "정확히 '<요약>|<판정>|<URL>' 한 줄만, 또는 뉴스가 없으면 정확히 "
+        f"'{NONE_SENTINEL}' 한 단어만 출력해."
     )
     return run_claude(prompt) or NONE_SENTINEL
 
@@ -90,14 +110,24 @@ def _log_raw(symbol: str, name: str, raw: str) -> None:
 def parse_verdict_line(raw: str) -> tuple[str, str, str] | None:
     """Returns (summary, verdict, url), or None if the stock had no material news or no
     confirmed article URL (an item without a real URL can't go into the Kakao list template, so
-    it's dropped rather than sent unlinked or with a guessed link)."""
+    it's dropped rather than sent unlinked or with a guessed link).
+
+    Lenient on two fronts that caused real stocks to be silently dropped (2026-09-08): the model
+    sometimes answers a NONE-ish variant ("NONE.", "none") instead of the exact sentinel, and
+    sometimes the summary field itself contains a stray "|" pushing the split past 3 parts -- in
+    that case the last two parts are still reliably verdict/url, so they're recovered via rsplit
+    instead of discarding the whole item."""
     text = raw.strip()
-    if text == NONE_SENTINEL or not text:
+    if not text or text.rstrip(".!").upper() == NONE_SENTINEL:
         return None
     parts = [p.strip() for p in text.split("|")]
-    if len(parts) != 3:
+    if len(parts) < 3:
         return None  # model didn't follow the 3-field format -- can't build a linked item
-    summary, verdict, url = parts
+    if len(parts) == 3:
+        summary, verdict, url = parts
+    else:
+        head, verdict, url = text.rsplit("|", 2)
+        summary, verdict, url = head.strip(), verdict.strip(), url.strip()
     if not url.startswith("http"):
         return None
     return summary, verdict, url
@@ -126,6 +156,10 @@ def main() -> int:
         print(f"TEST_DATE_KST 오버라이드: {test_date} 기준으로 실행합니다 (실 운영 스케줄에는 영향 없음)")
     else:
         now_kst = datetime.now(KST)
+
+    if already_dispatched_today(WORKFLOW_FILE, now_kst):
+        return 0
+
     items = []
     failures = []
     for stock in stocks:
@@ -139,11 +173,29 @@ def main() -> int:
         _log_raw(symbol, name, raw)
 
         parsed = parse_verdict_line(raw)
+        is_honest_none = raw.strip().rstrip(".!").upper() == NONE_SENTINEL
+        if parsed is None and raw.strip() and not is_honest_none:
+            # Didn't parse but also wasn't an honest "no news" -- likely a format slip rather
+            # than a real absence of news, so give the model one more chance before giving up.
+            try:
+                retry_raw = retry_stock_strict(symbol, name, now_kst)
+            except ClaudeCliError as exc:
+                print(f"FAIL(claude-retry) {symbol} {name}: {exc}", file=sys.stderr)
+                retry_raw = ""
+            if retry_raw:
+                _log_raw(f"{symbol}(retry)", name, retry_raw)
+                parsed = parse_verdict_line(retry_raw)
         if parsed is None:
             print(f"SKIP {symbol} {name}: 특이 뉴스 없음 (또는 URL 미확보)")
             continue
         summary, verdict, url = parsed
-        items.append({"title": name, "description": f"{summary} ({verdict})", "link_url": url})
+        items.append(
+            {
+                "title": name,
+                "description": f"{summary} ({verdict})",
+                "link_url": build_redirect_link(url),
+            }
+        )
         print(f"OK  {symbol} {name}: {verdict} url={url}")
 
     base_header = f"[관심종목 뉴스 {now_kst.strftime('%m/%d')}]"

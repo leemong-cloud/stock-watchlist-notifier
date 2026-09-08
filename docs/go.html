@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>이동 중...</title>
+</head>
+<body>
+<p id="msg">이동 중입니다...</p>
+<script>
+  // 카카오톡 기본 템플릿의 링크(web_url/mobile_web_url)는 카카오 개발자 콘솔의
+  // [앱 설정] > [플랫폼]에 등록된 도메인만 탭이 활성화된다. 매일 다른 뉴스 매체 도메인을
+  // 직접 링크로 쓰면 그 어떤 도메인도 사전 등록이 불가능해 구조적으로 클릭이 안 되므로,
+  // 이 저장소가 소유한 고정 도메인(leemong-cloud.github.io) 하나만 등록해두고 모든 기사
+  // 링크가 이 페이지를 거쳐가게 한다.
+  var params = new URLSearchParams(location.search);
+  var target = params.get("u");
+  var msg = document.getElementById("msg");
+  if (target && /^https?:\/\//i.test(target)) {
+    msg.textContent = "이동 중입니다... ";
+    var link = document.createElement("a");
+    link.href = target;
+    link.textContent = "여기를 눌러 이동";
+    msg.appendChild(link);
+    location.replace(target);
+  } else {
+    msg.textContent = "이동할 주소가 없습니다.";
+  }
+</script>
+<noscript>
+  <p>자바스크립트가 꺼져 있습니다. 원래 기사 링크는 카카오톡 메시지 설명에서 확인하세요.</p>
+</noscript>
+</body>
+</html>
