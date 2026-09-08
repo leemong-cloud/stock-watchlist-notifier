@@ -43,8 +43,10 @@ from kakao_client import (
     KakaoAuthError,
     KakaoSendError,
     build_redirect_link,
+    get_access_token,
     send_kakao_list_message,
     send_kakao_message,
+    send_text,
 )
 
 WORKFLOW_FILE = "kr-watchlist-news.yml"
@@ -52,7 +54,10 @@ WORKFLOW_FILE = "kr-watchlist-news.yml"
 WATCHLIST_PATH = Path(__file__).resolve().parent.parent / "watchlist.json"
 KST = timezone(timedelta(hours=9))
 NONE_SENTINEL = "NONE"
-LIST_CHUNK_SIZE = 3  # Kakao "list" template supports 1-3 content items per message
+LIST_CHUNK_MAX = 3  # Kakao "list" template supports 2-3 content items per message, never 1
+LIST_CHUNK_MIN = 2
+BUTTON_TITLE = "알림 봇 정보"  # relabels Kakao's un-removable default button (still opens
+# header_link_url, i.e. this repo) so it doesn't read like a link to the article itself
 
 
 def lookback_hours_for(now_kst: datetime) -> int:
@@ -74,8 +79,9 @@ def _build_stock_prompt(symbol: str, name: str, now_kst: datetime) -> str:
         f"지금은 {now_kst.strftime('%Y-%m-%d %H:%M')} (한국시간, {['월','화','수','목','금','토','일'][now_kst.weekday()]}요일) 기준이야. "
         f"{name}({symbol}) 관련, 이 시점으로부터 {window_note}에 나온 국내 뉴스와 해외(외신) "
         "뉴스를 모두 웹 검색으로 확인해서, 그중 투자자에게 중요한 것만 알려줘. 중요한 뉴스가 있으면 "
-        "다른 말 없이 정확히 이 형식으로만 답해: <핵심 내용 요약(카카오톡 카드에 2줄 정도 보이는 "
-        "분량인 60자 이내, 한 줄로 짧게 끊지 말고 그 안에서 육하원칙 중 중요한 것 위주로 채워)>|"
+        "다른 말 없이 정확히 이 형식으로만 답해: <기사 핵심 내용 요약. 반드시 두 문장으로 써: "
+        "①무슨 일이 있었는지(사실) 한 문장, ②그게 투자자에게 왜 중요한지/어떤 영향인지 한 문장. "
+        "전체 60~70자 이내, 카카오톡 카드에 2줄로 보이는 분량>|"
         "<호재 또는 부정 또는 중립 중 하나>|<그 뉴스를 확인한 대표 기사 1건의 정확한 URL(마크다운 "
         "링크 문법 금지, 순수 URL 문자열만)>. "
         "URL은 웹 검색으로 실제 확인한 기사의 링크여야 하며 절대 추측하거나 지어내지 마라. "
@@ -99,6 +105,24 @@ def retry_stock_strict(symbol: str, name: str, now_kst: datetime) -> str:
         f"'{NONE_SENTINEL}' 한 단어만 출력해."
     )
     return run_claude(prompt) or NONE_SENTINEL
+
+
+def chunk_for_kakao_list(items: list) -> list[list]:
+    """Splits into groups of LIST_CHUNK_MIN..LIST_CHUNK_MAX -- Kakao's list template rejects a
+    group of 1 (confirmed via official docs: "2개 이상 필수, 최대 3개"), so a naive fixed-size
+    chunk (e.g. 4 items -> [3, 1]) would make the last message fail to send. Instead this borrows
+    one item back from the last full group whenever the remainder would be exactly 1 (e.g. 4 ->
+    [2, 2], 7 -> [3, 2, 2])."""
+    n = len(items)
+    chunks = []
+    i = 0
+    while n - i > LIST_CHUNK_MAX:
+        size = LIST_CHUNK_MAX - 1 if (n - i - LIST_CHUNK_MAX) == 1 else LIST_CHUNK_MAX
+        chunks.append(items[i : i + size])
+        i += size
+    if n - i > 0:
+        chunks.append(items[i:])
+    return chunks
 
 
 def _log_raw(symbol: str, name: str, raw: str) -> None:
@@ -204,11 +228,20 @@ def main() -> int:
     try:
         if not items:
             send_kakao_message(f"{base_header}\n특이 뉴스 없음")
+        elif len(items) == 1:
+            # Kakao's list template rejects a single content item -- fall back to the text
+            # template, which still carries the one article's own link.
+            only = items[0]
+            send_text(
+                get_access_token(),
+                f"{base_header}\n{only['title']}: {only['description']}",
+                link_url=only["link_url"],
+            )
         else:
-            chunks = [items[i : i + LIST_CHUNK_SIZE] for i in range(0, len(items), LIST_CHUNK_SIZE)]
+            chunks = chunk_for_kakao_list(items)
             for idx, chunk in enumerate(chunks, start=1):
                 header = base_header if len(chunks) == 1 else f"{base_header} ({idx}/{len(chunks)})"
-                send_kakao_list_message(header, chunk)
+                send_kakao_list_message(header, chunk, button_title=BUTTON_TITLE)
     except (KakaoAuthError, KakaoSendError) as exc:
         print(f"FAIL(kakao) 다이제스트 발송 실패: {exc}", file=sys.stderr)
         return 1

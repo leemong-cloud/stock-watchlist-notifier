@@ -151,12 +151,16 @@ def send_list(
     header_title: str,
     items: list[dict],
     header_link_url: str = DEFAULT_LINK_URL,
+    button_title: str | None = None,
 ) -> None:
     """Kakao "list" default template -- unlike "text", each content item carries its OWN link, so
-    a single KakaoTalk bubble can point each stock at a different article. Kakao requires 1-3
-    items and an image_url per item (see NEWS_ICON_URL)."""
-    if not 1 <= len(items) <= 3:
-        raise ValueError(f"Kakao list 템플릿은 항목 1~3개만 지원합니다 (받은 개수: {len(items)})")
+    a single KakaoTalk bubble can point each stock at a different article. Kakao requires 2-3
+    items (confirmed via official docs: "2개 이상 필수, 최대 3개" -- a single item is rejected)
+    and an image_url per item (see NEWS_ICON_URL). When `buttons` is omitted, Kakao always
+    auto-adds one bottom button that opens `header_link_url` -- this can't be removed, only
+    relabeled via `button_title` (still opens the same header_link, just different text)."""
+    if not 2 <= len(items) <= 3:
+        raise ValueError(f"Kakao list 템플릿은 항목 2~3개만 지원합니다 (받은 개수: {len(items)})")
 
     template_object = {
         "object_type": "list",
@@ -174,6 +178,8 @@ def send_list(
             for item in items
         ],
     }
+    if button_title:
+        template_object["button_title"] = button_title
 
     resp = requests.post(
         KAPI_MEMO_URL,
@@ -185,8 +191,8 @@ def send_list(
         raise KakaoSendError(f"카카오 목록 메시지 발송 실패 (HTTP {resp.status_code}): {resp.text[:500]}")
 
 
-def send_kakao_list_message(header_title: str, items: list[dict]) -> None:
+def send_kakao_list_message(header_title: str, items: list[dict], button_title: str | None = None) -> None:
     """Convenience wrapper: refresh token -> send_list. Same failure contract as
     send_kakao_message (raises, caller decides skip-vs-fail)."""
     token = get_access_token()
-    send_list(token, header_title, items)
+    send_list(token, header_title, items, button_title=button_title)
