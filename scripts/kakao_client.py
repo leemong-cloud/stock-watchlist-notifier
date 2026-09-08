@@ -24,7 +24,9 @@ KAUTH_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 KAPI_MEMO_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 
 MAX_MESSAGE_CHARS = 190  # stays safely under the default "text" template's ~200-char limit
-LIST_DESCRIPTION_CHARS = 76  # defensive approximation of Kakao's list-item "4 lines" display cap
+LIST_DESCRIPTION_CHARS = 140  # ~2 lines' worth (2026-09-08: 76 rendered as barely 1 line -- the
+# prompt only asked for a 30-char summary, so raised both together; title is short (stock name)
+# so most of Kakao's documented "title+description combined, max 4 lines" budget goes here)
 LIST_TITLE_CHARS = 40
 
 DEFAULT_LINK_URL = "https://github.com/leemong-cloud/stock-watchlist-notifier"
