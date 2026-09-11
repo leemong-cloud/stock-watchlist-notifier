@@ -24,9 +24,17 @@ KAUTH_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 KAPI_MEMO_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 
 MAX_MESSAGE_CHARS = 190  # stays safely under the default "text" template's ~200-char limit
-LIST_DESCRIPTION_CHARS = 140  # ~2 lines' worth (2026-09-08: 76 rendered as barely 1 line -- the
-# prompt only asked for a 30-char summary, so raised both together; title is short (stock name)
-# so most of Kakao's documented "title+description combined, max 4 lines" budget goes here)
+LIST_DESCRIPTION_CHARS = 100  # 2026-09-11: official Kakao docs (developers.kakao.com/docs/latest/
+# ko/message-template/default, WebFetched directly) confirm list template content is "title과
+# 합쳐 최대 4줄 표시" -- i.e. title eats into the SAME 4-line budget as description, with no
+# separate per-field char limit documented. The prior 140-char budget (set 2026-09-08 on a guess)
+# was overflowing that shared budget, silently clipping the trailing 호재/부정/중립 verdict tag
+# that used to be appended at the END of description -- user-reported 2026-09-11 ("내용 불명확,
+# 호재/악재 구분자 안 보임"). Fix has two parts: (1) verdict now goes in the TITLE too (see
+# notify_kr_watchlist.py), which is short and essentially never truncated, so the marker survives
+# even if description gets clipped; (2) this budget is pulled back to leave more margin. Still an
+# estimate, not a confirmed exact char-per-line number -- watch the next few days' actual
+# deliveries and retune if still clipped.
 LIST_TITLE_CHARS = 40
 
 DEFAULT_LINK_URL = "https://github.com/leemong-cloud/stock-watchlist-notifier"

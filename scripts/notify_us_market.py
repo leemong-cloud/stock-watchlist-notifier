@@ -28,6 +28,17 @@ _WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
 
 FAILURE_SENTINEL = "최신 지수 정보 확인 실패"
 WORKFLOW_FILE = "us-market-mood.yml"
+HEADER_TAG = "[미국장 분위기]"  # 호출자가 별도로 붙이는 헤더 -- 모델이 프롬프트를 오독해 자기
+# 답변에도 이 헤더를 직접 포함시켜 최종 메시지에 두 번 나타나는 것이 2026-09-08/2026-09-10 두
+# 차례 실측 확인됨(예: "...[미국장 분위기] 9/10(목) 4거래일 연속 하락..."). build_prompt()에서
+# 명시적으로 금지했지만, 그래도 새어나올 경우를 대비해 코드에서도 한 번 더 제거한다.
+
+
+def _strip_model_artifacts(summary: str) -> str:
+    """모델이 지시를 어기고 자체 헤더나 글자수 검증 메타발언을 본문에 남겼을 때를 대비한
+    방어적 후처리. 주 방어선은 claude_cli.py의 시스템 프롬프트 강화 + 위 build_prompt() 수정
+    (2026-09-11)이며, 이건 그게 뚫렸을 때의 2차 안전장치일 뿐이다."""
+    return summary.replace(HEADER_TAG, "").strip()
 
 
 def build_prompt(now_kst: datetime) -> str:
@@ -41,9 +52,11 @@ def build_prompt(now_kst: datetime) -> str:
         "날짜를 명시한 뒤 그날의 결과를 요약해 -- 오래된 뉴스 기사의 날짜를 오늘 마감으로 착각하지 "
         "말고 반드시 검색 결과에 실제로 찍힌 날짜를 확인해서 말해. 한국 투자자가 참고할 만한 미국 "
         "증시 전반 분위기(주요 이슈, 눈에 띄는 업종/종목 동향)도 포함해서 한국어로 4문장 이내, 170자 "
-        "이내로 답해(맨 앞에 붙는 '[미국장 분위기]' 헤더를 포함해 카카오톡 메시지 한 건에 바로 들어갈 "
-        "분량이니 여유 있게 짧게 -- 위 4개 지수(S&P500/나스닥/다우/필라델피아 반도체지수) 수치를 "
-        "다 넣으면서도 이 글자수를 넘기지 않도록 문장을 압축해). 확인되지 않은 수치는 추측하지 말고, "
+        "이내로 답해. 네 답변 앞에는 호출하는 쪽에서 이미 '[미국장 분위기]' 헤더를 별도로 붙일 "
+        "것이므로, 그 헤더나 다른 어떤 대괄호 제목도 네가 직접 답변에 포함하지 마라 -- 오직 본문 "
+        "요약 문장만 답해(카카오톡 메시지 한 건에 이 헤더와 함께 바로 들어갈 분량이니 여유 있게 "
+        "짧게 -- 위 4개 지수(S&P500/나스닥/다우/필라델피아 반도체지수) 수치를 다 넣으면서도 이 "
+        "글자수를 넘기지 않도록 문장을 압축해). 확인되지 않은 수치는 추측하지 말고, "
         f"확인 가능한 정보가 없으면 정확히 '{FAILURE_SENTINEL}'라고만 답해."
     )
 
@@ -66,10 +79,11 @@ def main() -> int:
     prompt = build_prompt(now_kst)
 
     try:
-        summary = run_claude(prompt) or "요약 생성 실패"
+        summary = _strip_model_artifacts(run_claude(prompt) or "요약 생성 실패")
         print(f"RAW  {' '.join(summary.split())[:300]}", file=sys.stderr)
         if summary == FAILURE_SENTINEL:
-            summary = run_claude(prompt) or "요약 생성 실패"  # WebSearch가 그날따라 못 찾은 경우 1회만 재시도
+            summary = _strip_model_artifacts(run_claude(prompt) or "요약 생성 실패")  # WebSearch가 그날따라 못 찾은 경우 1회만 재시도
+            print(f"RAW(retry)  {' '.join(summary.split())[:300]}", file=sys.stderr)
     except ClaudeCliError as exc:
         print(f"FAIL(claude): {exc}", file=sys.stderr)
         return 1

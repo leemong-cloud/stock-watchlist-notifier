@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -81,7 +82,7 @@ def _build_stock_prompt(symbol: str, name: str, now_kst: datetime) -> str:
         "뉴스를 모두 웹 검색으로 확인해서, 그중 투자자에게 중요한 것만 알려줘. 중요한 뉴스가 있으면 "
         "다른 말 없이 정확히 이 형식으로만 답해: <기사 핵심 내용 요약. 반드시 두 문장으로 써: "
         "①무슨 일이 있었는지(사실) 한 문장, ②그게 투자자에게 왜 중요한지/어떤 영향인지 한 문장. "
-        "전체 60~70자 이내, 카카오톡 카드에 2줄로 보이는 분량>|"
+        "전체 45~55자 이내로 짧고 압축해서, 카카오톡 카드에 2줄로 보이는 분량>|"
         "<호재 또는 부정 또는 중립 중 하나>|<그 뉴스를 확인한 대표 기사 1건의 정확한 URL(마크다운 "
         "링크 문법 금지, 순수 URL 문자열만)>. "
         "URL은 웹 검색으로 실제 확인한 기사의 링크여야 하며 절대 추측하거나 지어내지 마라. "
@@ -193,9 +194,19 @@ def main() -> int:
         try:
             raw = summarize_stock(symbol, name, now_kst)
         except ClaudeCliError as exc:
+            # 2026-09-08~11 실전 로그에서 반복 확인: 8종목을 연속 호출하다 보면 뒤쪽 2~5종목이
+            # exit 1(빈 stderr, 즉시 실패) 또는 180초 타임아웃으로 한꺼번에 무너지는 패턴이
+            # 거의 매일 나타남 -- 순간적인 레이트리밋/사용량 한도로 추정. 20초 대기 후 1회만
+            # 재시도해 짧은 버스트성 제한이면 회복하도록 한다.
             print(f"FAIL(claude) {symbol} {name}: {exc}", file=sys.stderr)
-            failures.append(symbol)
-            continue
+            print(f"RETRY(claude) {symbol} {name}: 20초 대기 후 1회 재시도", file=sys.stderr)
+            time.sleep(20)
+            try:
+                raw = summarize_stock(symbol, name, now_kst)
+            except ClaudeCliError as exc2:
+                print(f"FAIL(claude-2nd) {symbol} {name}: {exc2}", file=sys.stderr)
+                failures.append(symbol)
+                continue
         _log_raw(symbol, name, raw)
 
         parsed = parse_verdict_line(raw)
@@ -217,8 +228,13 @@ def main() -> int:
         summary, verdict, url = parsed
         items.append(
             {
-                "title": name,
-                "description": f"{summary} ({verdict})",
+                # 2026-09-11: verdict를 description 끝이 아니라 title 앞쪽에 붙인다 -- 공식
+                # Kakao 문서 확인 결과 list 템플릿은 title+description 합쳐 최대 4줄까지만
+                # 보이므로, description 끝에 붙이면 내용이 길 때 (verdict) 태그부터 잘려나가
+                # "호재/악재 구분자가 안 보인다"는 문제가 실제로 발생했다. title은 짧아서
+                # 잘릴 위험이 거의 없으므로 여기 붙이는 게 훨씬 안전하다.
+                "title": f"{name} [{verdict}]",
+                "description": summary,
                 "link_url": build_redirect_link(url),
             }
         )
@@ -248,7 +264,14 @@ def main() -> int:
 
     if failures:
         print(f"{len(failures)}/{len(stocks)}건 조회 실패(다이제스트에서 누락됨): {failures}", file=sys.stderr)
-        return 1
+        if not items:
+            # 성공한 종목이 하나도 없다 -- 카카오 발송 자체가 사실상 빈 메시지였을 것이므로
+            # 진짜 실패로 취급한다.
+            return 1
+        # 2026-09-11 사용자 리포트: 일부 종목 조회만 실패해도 매번 워크플로가 "Failed"로 끝나
+        # GitHub Actions가 매일 실패 메일을 보냈다 -- 정작 카카오 다이제스트는 성공한 종목만
+        # 모아 정상 발송됐는데도 매번 거짓 실패 알림이 온 것. 실패 종목은 위 로그에 이미
+        # 남겼으니(진단 가능) 부분 실패로 전체 워크플로를 실패 처리하지 않는다.
     return 0
 
 
