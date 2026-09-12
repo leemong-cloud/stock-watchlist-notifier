@@ -23,7 +23,9 @@ import requests
 KAUTH_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 KAPI_MEMO_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 
-MAX_MESSAGE_CHARS = 190  # stays safely under the default "text" template's ~200-char limit
+MAX_MESSAGE_CHARS = 198  # 2026-09-12: 공식 Kakao 문서(developers.kakao.com/docs/latest/ko/
+# message-template/default)로 "text" 필드가 정확히 200자 상한임을 확인(이전엔 추정치였음) --
+# 2자만 여유로 남기고 거의 꽉 채워 사용.
 LIST_DESCRIPTION_CHARS = 100  # 2026-09-11: official Kakao docs (developers.kakao.com/docs/latest/
 # ko/message-template/default, WebFetched directly) confirm list template content is "title과
 # 합쳐 최대 4줄 표시" -- i.e. title eats into the SAME 4-line budget as description, with no
