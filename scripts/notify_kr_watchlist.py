@@ -80,12 +80,12 @@ def _build_stock_prompt(symbol: str, name: str, now_kst: datetime) -> str:
         f"지금은 {now_kst.strftime('%Y-%m-%d %H:%M')} (한국시간, {['월','화','수','목','금','토','일'][now_kst.weekday()]}요일) 기준이야. "
         f"{name}({symbol}) 관련, 이 시점으로부터 {window_note}에 나온 국내 뉴스와 해외(외신) "
         "뉴스를 모두 웹 검색으로 확인해서, 그중 투자자에게 중요한 것만 알려줘. 중요한 뉴스가 있으면 "
-        "다른 말 없이 정확히 이 형식으로만 답해: <기사 핵심 내용 요약. 반드시 두 문장으로 써: "
-        "①무슨 일이 있었는지 핵심만 한 문장(불필요한 정밀 수치는 생략, 꼭 필요한 숫자 1개 정도만), "
-        "②그게 투자자에게 왜 중요한지/어떤 영향인지에 대한 해석을 ①보다 더 비중 있게 한 문장. "
-        "전체 45~55자 이내로 짧고 압축해서, 카카오톡 카드에 2줄로 보이는 분량>|"
-        "<호재 또는 부정 또는 중립 중 하나>|<그 뉴스를 확인한 대표 기사 1건의 정확한 URL(마크다운 "
+        "다른 말 없이 정확히 이 형식으로만 답해: <사실: 무슨 일이 있었는지 완결된 한 문장, 25자 이내, "
+        "꼭 필요한 숫자 1개 정도만>|<해석: 그게 투자자에게 왜 중요한지/어떤 영향인지 완결된 한 문장, "
+        "45자 이내>|<호재 또는 부정 또는 중립 중 하나>|<그 뉴스를 확인한 대표 기사 1건의 정확한 URL(마크다운 "
         "링크 문법 금지, 순수 URL 문자열만)>. "
+        "사실·해석은 반드시 한국어로 써라. 외신·영문 기사도 한국어로 번역해서 요약하고, 영어 문장이나 "
+        "영어 기사 제목을 그대로 쓰지 마라(회사명·티커 제외). 각 문장은 글자 수 안에서 끝까지 완결해야 한다. "
         "URL은 웹 검색으로 실제 확인한 기사의 링크여야 하며 절대 추측하거나 지어내지 마라. "
         f"확인된 중요 뉴스가 없거나, 있어도 확실한 원문 URL을 확인 못 했으면 절대 추측하지 말고 "
         f"정확히 '{NONE_SENTINEL}'이라고만 답해."
@@ -103,7 +103,7 @@ def retry_stock_strict(symbol: str, name: str, now_kst: datetime) -> str:
     silently dropping stocks like a format violation would look identical to genuine "no news")."""
     prompt = _build_stock_prompt(symbol, name, now_kst) + (
         " 방금 전 답변 형식이 올바르지 않았어. 다시 답할 때는 절대 다른 말을 덧붙이지 말고 "
-        "정확히 '<요약>|<판정>|<URL>' 한 줄만, 또는 뉴스가 없으면 정확히 "
+        "정확히 '<사실>|<해석>|<판정>|<URL>' 한 줄만(한국어), 또는 뉴스가 없으면 정확히 "
         f"'{NONE_SENTINEL}' 한 단어만 출력해."
     )
     return run_claude(prompt) or NONE_SENTINEL
@@ -135,30 +135,41 @@ def _log_raw(symbol: str, name: str, raw: str) -> None:
     print(f"RAW  {symbol} {name}: {flat[:300]}", file=sys.stderr)
 
 
-def parse_verdict_line(raw: str) -> tuple[str, str, str] | None:
-    """Returns (summary, verdict, url), or None if the stock had no material news or no
-    confirmed article URL (an item without a real URL can't go into the Kakao list template, so
-    it's dropped rather than sent unlinked or with a guessed link).
+VERDICTS = ("호재", "부정", "중립")
+VERDICT_EMOJI = {"호재": "🟢", "부정": "🔴", "중립": "⚪"}
 
-    Lenient on two fronts that caused real stocks to be silently dropped (2026-09-08): the model
-    sometimes answers a NONE-ish variant ("NONE.", "none") instead of the exact sentinel, and
-    sometimes the summary field itself contains a stray "|" pushing the split past 3 parts -- in
-    that case the last two parts are still reliably verdict/url, so they're recovered via rsplit
-    instead of discarding the whole item."""
+
+def _has_hangul(text: str) -> bool:
+    return any("가" <= ch <= "힣" for ch in text)
+
+
+def parse_verdict_line(raw: str) -> tuple[str, str, str, str] | None:
+    """Returns (fact, insight, verdict, url), or None if the stock had no material news, no
+    confirmed article URL (an item without a real URL can't go into the Kakao list template, so
+    it's dropped rather than sent unlinked or with a guessed link), or the summary came back
+    without any Korean (English-only -> None so the caller's strict retry kicks in).
+
+    Format is '<fact>|<insight>|<verdict>|<url>'. Lenient on real failure modes seen 2026-09-08:
+    NONE-ish variants ("NONE.", "none"), a stray "|" inside the text (verdict/url are still the
+    last two parts, recovered via rsplit), and the legacy 3-field '<summary>|<verdict>|<url>'
+    (treated as fact with empty insight)."""
     text = raw.strip()
     if not text or text.rstrip(".!").upper() == NONE_SENTINEL:
         return None
-    parts = [p.strip() for p in text.split("|")]
-    if len(parts) < 3:
-        return None  # model didn't follow the 3-field format -- can't build a linked item
-    if len(parts) == 3:
-        summary, verdict, url = parts
-    else:
-        head, verdict, url = text.rsplit("|", 2)
-        summary, verdict, url = head.strip(), verdict.strip(), url.strip()
+    if text.count("|") < 2:
+        return None  # model didn't follow the field format -- can't build a linked item
+    head, verdict, url = (p.strip() for p in text.rsplit("|", 2))
     if not url.startswith("http"):
         return None
-    return summary, verdict, url
+    if "|" in head:
+        fact, insight = (p.strip() for p in head.split("|", 1))
+    else:
+        fact, insight = head, ""
+    if not _has_hangul(fact + insight):
+        return None
+    if verdict not in VERDICTS:
+        verdict = "중립"
+    return fact, insight, verdict, url
 
 
 def main() -> int:
@@ -226,16 +237,16 @@ def main() -> int:
         if parsed is None:
             print(f"SKIP {symbol} {name}: 특이 뉴스 없음 (또는 URL 미확보)")
             continue
-        summary, verdict, url = parsed
+        fact, insight, verdict, url = parsed
         items.append(
             {
-                # 2026-09-11: verdict를 description 끝이 아니라 title 앞쪽에 붙인다 -- 공식
-                # Kakao 문서 확인 결과 list 템플릿은 title+description 합쳐 최대 4줄까지만
-                # 보이므로, description 끝에 붙이면 내용이 길 때 (verdict) 태그부터 잘려나가
-                # "호재/악재 구분자가 안 보인다"는 문제가 실제로 발생했다. title은 짧아서
-                # 잘릴 위험이 거의 없으므로 여기 붙이는 게 훨씬 안전하다.
-                "title": f"{name} [{verdict}]",
-                "description": summary,
+                # 2026-09-11: verdict는 description 끝이 아니라 title에 둔다 -- list 템플릿은
+                # title+description 합쳐 4줄까지만 보여 description 끝의 태그가 잘렸었다.
+                "title": f"{VERDICT_EMOJI[verdict]} {name} [{verdict}]",
+                "description": f"{fact}\n↳ {insight}" if insight else fact,
+                "fact": fact,
+                "insight": insight,
+                "verdict": verdict,
                 "link_url": build_redirect_link(url),
             }
         )

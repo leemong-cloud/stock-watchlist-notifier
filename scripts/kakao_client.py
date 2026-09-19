@@ -26,7 +26,8 @@ KAPI_MEMO_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 MAX_MESSAGE_CHARS = 198  # 2026-09-12: 공식 Kakao 문서(developers.kakao.com/docs/latest/ko/
 # message-template/default)로 "text" 필드가 정확히 200자 상한임을 확인(이전엔 추정치였음) --
 # 2자만 여유로 남기고 거의 꽉 채워 사용.
-LIST_DESCRIPTION_CHARS = 100  # 2026-09-11: official Kakao docs (developers.kakao.com/docs/latest/
+LIST_DESCRIPTION_CHARS = 90  # (was 100; fact+insight are budgeted separately by the prompt)
+# 2026-09-11: official Kakao docs (developers.kakao.com/docs/latest/
 # ko/message-template/default, WebFetched directly) confirm list template content is "title과
 # 합쳐 최대 4줄 표시" -- i.e. title eats into the SAME 4-line budget as description, with no
 # separate per-field char limit documented. The prior 140-char budget (set 2026-09-08 on a guess)
@@ -81,7 +82,27 @@ def _trim_sentence_safe(text: str, limit: int) -> str:
 NEWS_ICON_URL = (
     "https://raw.githubusercontent.com/leemong-cloud/stock-watchlist-notifier/main/assets/news-icon.png"
 )
-NEWS_ICON_SIZE = 512
+NEWS_ICON_SIZE = 200  # verdict icons are 200x200 (was 512 -- needlessly large)
+_ICON_BASE = "https://raw.githubusercontent.com/leemong-cloud/stock-watchlist-notifier/main/assets/"
+# One distinct icon per verdict (green up / red down / gray flat) so the card reads at a glance.
+VERDICT_ICON_URLS = {
+    "호재": _ICON_BASE + "icon-good.png",
+    "부정": _ICON_BASE + "icon-bad.png",
+    "중립": _ICON_BASE + "icon-neutral.png",
+}
+
+
+def _fit_description(item: dict) -> str:
+    """Prefer complete sentences over a mid-sentence cut: if fact + insight exceed the budget,
+    drop the insight wholesale and keep only the fact (trim is the last-resort safety net)."""
+    fact = item.get("fact")
+    if fact is None:
+        return _trim_sentence_safe(item["description"], LIST_DESCRIPTION_CHARS)
+    insight = item.get("insight", "")
+    full = f"{fact}\n↳ {insight}" if insight else fact
+    if len(full) <= LIST_DESCRIPTION_CHARS:
+        return full
+    return _trim_sentence_safe(fact, LIST_DESCRIPTION_CHARS)
 
 
 class KakaoAuthError(RuntimeError):
@@ -179,8 +200,8 @@ def send_list(
         "contents": [
             {
                 "title": _trim_sentence_safe(item["title"], LIST_TITLE_CHARS),
-                "description": _trim_sentence_safe(item["description"], LIST_DESCRIPTION_CHARS),
-                "image_url": NEWS_ICON_URL,
+                "description": _fit_description(item),
+                "image_url": VERDICT_ICON_URLS.get(item.get("verdict", ""), NEWS_ICON_URL),
                 "image_width": NEWS_ICON_SIZE,
                 "image_height": NEWS_ICON_SIZE,
                 "link": {"web_url": item["link_url"], "mobile_web_url": item["link_url"]},
