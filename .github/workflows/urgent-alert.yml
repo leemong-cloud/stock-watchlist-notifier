@@ -1,0 +1,29 @@
+name: Urgent alert -> KakaoTalk
+
+# On-demand only (no schedule) -- dispatched by the opencode project's /watch-portfolio
+# monitoring loop the moment it detects a volume/price anomaly on a holding
+# (`gh workflow run urgent-alert.yml -f message="..."`). Deliberately does NOT reuse
+# kr-watchlist-news.yml's job (Claude Code + WebSearch per stock) -- that takes minutes and costs
+# LLM tokens on this repo's own budget; an urgent alert just needs kakao_client.py's existing
+# "send to me" memo call, which is a single REST round trip.
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: '카카오톡으로 보낼 메시지 텍스트 (200자 제한, 초과분은 자동 트림됨)'
+        required: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python scripts/send_urgent_alert.py
+        env:
+          ALERT_MESSAGE: ${{ github.event.inputs.message }}
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+          KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
