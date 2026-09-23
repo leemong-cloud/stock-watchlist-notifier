@@ -7,15 +7,23 @@ strips weight/quantity/avgPrice before it ever reaches this public repo).
 For each stock, asks Claude (via the Claude Code CLI's built-in WebSearch tool -- see
 claude_cli.py) for material news from the last 24 hours (anchored to the run's actual KST
 clock, not a vague "24~48h" window -- except Monday runs, which widen to 72h so weekend news
-isn't silently missed, see lookback_hours_for) across BOTH domestic and foreign (외신) coverage,
-reduced to a one-line summary + a 호재/부정/중립 verdict + the URL of one representative article
-actually found via search. No numeric claim is accepted without the model having actually
-searched for it, and no item is built without a real URL -- if Claude can't pin down a confirmed
-article link, that's treated the same as "no material news" (NONE_SENTINEL) rather than guessing
-a link. A stock with no material news is silently omitted from the digest -- the user asked not
-to spell out "no news" per stock. The model's raw per-stock response is always printed to stderr
-(_log_raw) so a day where everything gets skipped can actually be diagnosed after the fact
-(2026-09-06: 8/8 stocks skipped with zero visibility into why -- this was previously unrecoverable).
+isn't silently missed, see lookback_hours_for) across BOTH domestic and foreign (외신) coverage.
+The model is told to run multiple distinct searches (not stop at the first hit), gather several
+candidate articles, tally how many are 호재/부정/중립, and pick the single most CRITICAL one as
+the representative article -- ranked by real-world price impact (regulatory/legal action,
+recalls, protests at a business site, earnings surprises, etc.) over indirect analyst-note
+chatter, not by whichever article the search happened to surface first or was published earliest
+(2026-09-23: user reported the digest kept surfacing the oldest/first-found article for a stock
+even when a same-day, more impactful event existed -- e.g. a residents' protest outranking a
+sell-side target-price note from the day before). Reduced to a one-line summary + verdict + the
+URL of that representative article. No numeric claim is accepted without the model having
+actually searched for it, and no item is built without a real URL -- if Claude can't pin down a
+confirmed article link, that's treated the same as "no material news" (NONE_SENTINEL) rather than
+guessing a link. A stock with no material news is silently omitted from the digest -- the user
+asked not to spell out "no news" per stock. The model's raw per-stock response is always printed
+to stderr (_log_raw) so a day where everything gets skipped can actually be diagnosed after the
+fact (2026-09-06: 8/8 stocks skipped with zero visibility into why -- this was previously
+unrecoverable).
 
 All per-stock results are collected first. Kakao's "list" default template lets each item carry
 its own link (unlike "text", which supports only one link per whole message), so tapping a
@@ -79,14 +87,24 @@ def _build_stock_prompt(symbol: str, name: str, now_kst: datetime) -> str:
     return (
         f"지금은 {now_kst.strftime('%Y-%m-%d %H:%M')} (한국시간, {['월','화','수','목','금','토','일'][now_kst.weekday()]}요일) 기준이야. "
         f"{name}({symbol}) 관련, 이 시점으로부터 {window_note}에 나온 국내 뉴스와 해외(외신) "
-        "뉴스를 모두 웹 검색으로 확인해서, 그중 투자자에게 중요한 것만 알려줘. 중요한 뉴스가 있으면 "
-        "다른 말 없이 정확히 이 형식으로만 답해: <사실: 무슨 일이 있었는지 완결된 한 문장, 25자 이내, "
+        "뉴스를 웹 검색으로 확인해줘. 검색어를 바꿔가며 최소 2회 이상 검색해서 후보 기사를 "
+        "여러 건 모아봐 -- 처음 걸린 결과 하나만 보고 멈추지 마라. 모은 기사들을 각각 "
+        "호재/부정/중립으로 분류하고 각 개수를 세어라. "
+        "그중에서 대표로 삼을 기사 1건은 '가장 critical한' 것으로 골라라: 주가에 직접적·구체적 "
+        "영향을 줄 수 있는 사건(규제·제재, 소송, 리콜, 대규모 계약 체결/파기, 사업장 관련 "
+        "시위·갈등, 실적 서프라이즈, 경영진 이슈 등)을 증권사 리포트·목표주가 조정처럼 "
+        "간접적이고 해석 여지가 있는 뉴스보다 우선해라. 단순히 먼저 검색된 기사나 가장 이른 "
+        "시각에 발행된 기사를 그대로 대표로 고르지 마라 -- 반드시 투자자 임팩트 기준으로 "
+        "재평가해라. 임팩트가 비슷하면 더 최근 기사를 우선해라. "
+        "투자자에게 중요한 뉴스가 하나라도 있으면 다른 말 없이 정확히 이 형식으로만 답해: "
+        "<호재로 분류한 기사 개수(숫자만)>|<부정으로 분류한 기사 개수(숫자만)>|<중립으로 분류한 "
+        "기사 개수(숫자만)>|<사실: 대표 기사에서 무슨 일이 있었는지 완결된 한 문장, 25자 이내, "
         "꼭 필요한 숫자 1개 정도만>|<해석: 그게 투자자에게 왜 중요한지/어떤 영향인지 완결된 한 문장, "
-        "45자 이내>|<호재 또는 부정 또는 중립 중 하나>|<그 뉴스를 확인한 대표 기사 1건의 정확한 URL(마크다운 "
+        "45자 이내>|<대표 기사의 호재 또는 부정 또는 중립 중 하나>|<대표 기사의 정확한 URL(마크다운 "
         "링크 문법 금지, 순수 URL 문자열만)>. "
         "사실·해석은 반드시 한국어로 써라. 외신·영문 기사도 한국어로 번역해서 요약하고, 영어 문장이나 "
         "영어 기사 제목을 그대로 쓰지 마라(회사명·티커 제외). 각 문장은 글자 수 안에서 끝까지 완결해야 한다. "
-        "URL은 웹 검색으로 실제 확인한 기사의 링크여야 하며 절대 추측하거나 지어내지 마라. "
+        "URL은 웹 검색으로 실제 확인한 대표 기사의 링크여야 하며 절대 추측하거나 지어내지 마라. "
         f"확인된 중요 뉴스가 없거나, 있어도 확실한 원문 URL을 확인 못 했으면 절대 추측하지 말고 "
         f"정확히 '{NONE_SENTINEL}'이라고만 답해."
     )
@@ -103,8 +121,8 @@ def retry_stock_strict(symbol: str, name: str, now_kst: datetime) -> str:
     silently dropping stocks like a format violation would look identical to genuine "no news")."""
     prompt = _build_stock_prompt(symbol, name, now_kst) + (
         " 방금 전 답변 형식이 올바르지 않았어. 다시 답할 때는 절대 다른 말을 덧붙이지 말고 "
-        "정확히 '<사실>|<해석>|<판정>|<URL>' 한 줄만(한국어), 또는 뉴스가 없으면 정확히 "
-        f"'{NONE_SENTINEL}' 한 단어만 출력해."
+        "정확히 '<호재수>|<부정수>|<중립수>|<사실>|<해석>|<판정>|<URL>' 한 줄만(한국어), "
+        f"또는 뉴스가 없으면 정확히 '{NONE_SENTINEL}' 한 단어만 출력해."
     )
     return run_claude(prompt) or NONE_SENTINEL
 
@@ -143,19 +161,33 @@ def _has_hangul(text: str) -> bool:
     return any("가" <= ch <= "힣" for ch in text)
 
 
-def parse_verdict_line(raw: str) -> tuple[str, str, str, str] | None:
-    """Returns (fact, insight, verdict, url), or None if the stock had no material news, no
-    confirmed article URL (an item without a real URL can't go into the Kakao list template, so
-    it's dropped rather than sent unlinked or with a guessed link), or the summary came back
-    without any Korean (English-only -> None so the caller's strict retry kicks in).
+def parse_verdict_line(raw: str) -> tuple[int | None, int | None, int | None, str, str, str, str] | None:
+    """Returns (good_count, bad_count, neutral_count, fact, insight, verdict, url), or None if the
+    stock had no material news, no confirmed article URL (an item without a real URL can't go
+    into the Kakao list template, so it's dropped rather than sent unlinked or with a guessed
+    link), or the summary came back without any Korean (English-only -> None so the caller's
+    strict retry kicks in).
 
-    Format is '<fact>|<insight>|<verdict>|<url>'. Lenient on real failure modes seen 2026-09-08:
-    NONE-ish variants ("NONE.", "none"), a stray "|" inside the text (verdict/url are still the
-    last two parts, recovered via rsplit), and the legacy 3-field '<summary>|<verdict>|<url>'
-    (treated as fact with empty insight)."""
+    Format is '<good>|<bad>|<neutral>|<fact>|<insight>|<verdict>|<url>' (2026-09-23: added the
+    3 leading counts so the digest can show how many 호재/부정/중립 articles were actually found,
+    not just the one picked as representative -- see _build_stock_prompt). The 3 count fields are
+    peeled off the front first since they're pure digits, which is unambiguous even if the
+    free-text fact/insight later contain a stray "|". If the leading fields aren't all digits
+    (model replied in the older 4-field '<fact>|<insight>|<verdict>|<url>' format, or drifted),
+    falls back to the legacy parse with counts as None rather than dropping the item entirely --
+    same lenient philosophy as before (2026-09-08 lessons: NONE-ish variants like "NONE.",
+    "none", a stray "|" inside the text recovered via rsplit, and the legacy 3-field
+    '<summary>|<verdict>|<url>' treated as fact with empty insight)."""
     text = raw.strip()
     if not text or text.rstrip(".!").upper() == NONE_SENTINEL:
         return None
+
+    good = bad = neutral = None
+    parts = text.split("|", 3)
+    if len(parts) == 4 and all(p.strip().isdigit() for p in parts[:3]):
+        good, bad, neutral = (int(p.strip()) for p in parts[:3])
+        text = parts[3]
+
     if text.count("|") < 2:
         return None  # model didn't follow the field format -- can't build a linked item
     head, verdict, url = (p.strip() for p in text.rsplit("|", 2))
@@ -169,7 +201,7 @@ def parse_verdict_line(raw: str) -> tuple[str, str, str, str] | None:
         return None
     if verdict not in VERDICTS:
         verdict = "중립"
-    return fact, insight, verdict, url
+    return good, bad, neutral, fact, insight, verdict, url
 
 
 def main() -> int:
@@ -237,12 +269,22 @@ def main() -> int:
         if parsed is None:
             print(f"SKIP {symbol} {name}: 특이 뉴스 없음 (또는 URL 미확보)")
             continue
-        fact, insight, verdict, url = parsed
+        good, bad, neutral, fact, insight, verdict, url = parsed
+        # 2026-09-11: verdict는 description 끝이 아니라 title에 둔다 -- list 템플릿은
+        # title+description 합쳐 4줄까지만 보여 description 끝의 태그가 잘렸었다.
+        # 2026-09-23: 개수(good/bad/neutral)를 구했으면 제목에 이모지로 압축해 호재/부정/중립
+        # 검색 건수를 함께 보여준다 -- description(90자) 예산은 건드리지 않아 짤림 문제를
+        # 악화시키지 않는다. 구 포맷 응답(개수 없음)은 기존 [verdict] 태그로 자연 폴백.
+        if good is not None:
+            title = (
+                f"{VERDICT_EMOJI[verdict]} {name} "
+                f"{VERDICT_EMOJI['호재']}{good}{VERDICT_EMOJI['부정']}{bad}{VERDICT_EMOJI['중립']}{neutral}"
+            )
+        else:
+            title = f"{VERDICT_EMOJI[verdict]} {name} [{verdict}]"
         items.append(
             {
-                # 2026-09-11: verdict는 description 끝이 아니라 title에 둔다 -- list 템플릿은
-                # title+description 합쳐 4줄까지만 보여 description 끝의 태그가 잘렸었다.
-                "title": f"{VERDICT_EMOJI[verdict]} {name} [{verdict}]",
+                "title": title,
                 "description": f"{fact}\n↳ {insight}" if insight else fact,
                 "fact": fact,
                 "insight": insight,
@@ -250,7 +292,7 @@ def main() -> int:
                 "link_url": build_redirect_link(url),
             }
         )
-        print(f"OK  {symbol} {name}: {verdict} url={url}")
+        print(f"OK  {symbol} {name}: {verdict} (호재{good} 부정{bad} 중립{neutral}) url={url}")
 
     base_header = f"[관심종목 뉴스 {now_kst.strftime('%m/%d')}]"
     try:

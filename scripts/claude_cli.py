@@ -23,7 +23,10 @@ MODEL = "sonnet"  # switched from haiku 2026-09-07: haiku's WebSearch grounding 
 # for material-news detection (8/8 watchlist stocks silently skipped as "no news" on 2026-09-06,
 # with zero visibility into whether that was true or a format/grounding failure -- see the raw
 # per-stock logging added to notify_kr_watchlist.py the same day)
-TIMEOUT_SECONDS = 180  # sonnet's WebSearch pass runs longer than haiku's; was 120
+TIMEOUT_SECONDS = 240  # was 180; 2026-09-23: KR digest prompt now asks for >=2 distinct searches
+# plus comparing several candidate articles before picking the most critical one, which runs
+# longer than a single-search pass -- retune if real runs still time out or if 240s proves
+# needlessly generous
 
 _CLEAN_OUTPUT_SYSTEM_PROMPT = (
     "출력은 요청된 요약 문장 그 자체만 반환하라. 부연 설명, 괄호 안 보충 설명, 출처 목록, "
