@@ -1,4 +1,4 @@
-"""Daily US market mood summary -> KakaoTalk.
+"""Daily US market mood summary -> Telegram.
 
 Not tied to any specific holding -- a general "how did US markets close, what should a Korean
 investor know before KR market open" summary, sent once per day (see
@@ -25,10 +25,11 @@ date given to the model, so it had no grounding to notice a closed session (conf
    여기도 <<<PART1>>>/<<<PART2>>>/<<<END>>> 델리미터 계약을 걸어 마커 밖의 텍스트는 파싱
    단계에서 구조적으로 버려지게 했다 -- 표현이 뭐든 상관없이 마커 밖이면 사라진다.
 
-동시에 사용자 요청으로 콘텐츠 방향도 바꿈: 숫자를 욱여넣기보다 분위기/해석 중심으로, 카카오
-"기본 텍스트" 템플릿의 공식 200자 상한(developers.kakao.com/docs/latest/ko/message-template/
-default 확인) 안에서 한 메시지로는 여유가 부족해 분위기+해석(PART1)과 세부 지수 흐름(PART2)을
-카카오톡 2개 메시지로 나눠 보낸다.
+동시에 사용자 요청으로 콘텐츠 방향도 바꿈: 숫자를 욱여넣기보다 분위기/해석 중심으로.
+
+2026-09-23: 카카오 -> 텔레그램 전환에 맞춰 분위기+해석(PART1)과 세부 지수 흐름(PART2)을
+메시지 1건으로 합쳐 보낸다 -- 예전엔 카카오 "기본 텍스트" 템플릿의 공식 200자 상한 때문에
+2개 메시지로 나눠야 했지만, 텔레그램 sendMessage는 4096자를 지원해 그 제약이 사라졌다.
 """
 from __future__ import annotations
 
@@ -39,7 +40,7 @@ from datetime import datetime, timedelta, timezone
 
 from claude_cli import ClaudeCliError, run_claude
 from dedup_guard import already_dispatched_today
-from kakao_client import KakaoAuthError, KakaoSendError, send_kakao_message
+from telegram_client import TelegramAuthError, TelegramSendError, send_text
 
 KST = timezone(timedelta(hours=9))
 _WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
@@ -226,18 +227,19 @@ def main() -> int:
         return 0
 
     part1, part2 = parsed
+    text = f"{HEADER_TAG}\n{part1}"
+    if part2:
+        text += f"\n\n{HEADER_TAG2}\n{part2}"
     try:
-        send_kakao_message(f"{HEADER_TAG}\n{part1}")
-        if part2:
-            send_kakao_message(f"{HEADER_TAG2}\n{part2}")
-    except (KakaoAuthError, KakaoSendError) as exc:
-        print(f"FAIL(kakao): {exc}", file=sys.stderr)
+        send_text(text)
+    except (TelegramAuthError, TelegramSendError) as exc:
+        print(f"FAIL(telegram): {exc}", file=sys.stderr)
         return 1
 
     if part2:
-        print("OK  미국장 분위기 요약 발송 완료 (2건)")
+        print("OK  미국장 분위기 요약 발송 완료")
     else:
-        print("OK  미국장 분위기 요약 발송 완료 (휴리스틱 정제, 1건)")
+        print("OK  미국장 분위기 요약 발송 완료 (휴리스틱 정제)")
     return 0
 
 

@@ -1,4 +1,4 @@
-"""Prevents a duplicate KakaoTalk send when both the external trigger (workflow_dispatch, the
+"""Prevents a duplicate Telegram send when both the external trigger (workflow_dispatch, the
 primary path -- see README's "외부 트리거 설정") and the `schedule` trigger (kept only as a
 safety net for when the external trigger fails) end up firing on the same day.
 

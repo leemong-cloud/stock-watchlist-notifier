@@ -13,7 +13,9 @@ web search only (no Bash/file-write access), since this is a public repo and the
 needs anything else. The system-prompt addition suppresses Claude Code's default habit of
 appending a "Sources:" section and explanatory asides -- confirmed empirically (2026-09-06) that
 without it, responses include markdown source links and parenthetical commentary that blow past
-Kakao's ~190-char message limit.
+the tight per-field char budgets the calling prompts enforce (originally tuned against Kakao's
+~190-char message limit; kept tight after the 2026-09-23 move to Telegram since the digest is
+still meant to read as a one-line summary, not a wall of text).
 """
 from __future__ import annotations
 

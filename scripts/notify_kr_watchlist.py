@@ -1,4 +1,4 @@
-"""Daily KR watchlist news digest -> KakaoTalk (Kakao "list" template, one item per stock).
+"""Daily KR watchlist news digest -> Telegram.
 
 Reads watchlist.json (symbol+name only -- committed by the opencode project's
 Publish-Watchlist.ps1, which derives it from the user's actual TOSS holdings but deliberately
@@ -25,12 +25,13 @@ to stderr (_log_raw) so a day where everything gets skipped can actually be diag
 fact (2026-09-06: 8/8 stocks skipped with zero visibility into why -- this was previously
 unrecoverable).
 
-All per-stock results are collected first. Kakao's "list" default template lets each item carry
-its own link (unlike "text", which supports only one link per whole message), so tapping a
-stock's row opens that stock's own article -- but Kakao caps a list message at 3 items, so
-results are chunked into groups of <=3 and sent as one KakaoTalk message per chunk (worst case,
-with all 8 watchlist stocks having news, is 3 messages). A quiet day with zero items still sends
-the old plain "text" message ("특이 뉴스 없음") since there's nothing to link.
+All per-stock results are collected first, then rendered as one Telegram message with each
+stock's title/fact/insight and its article URL on its own line (Telegram auto-linkifies a bare
+URL, so no card/link-domain machinery is needed -- see telegram_client.py). Unlike Kakao's list
+template, Telegram has no min/max item-count constraint per message, only a 4096-char budget
+(telegram_client.MAX_MESSAGE_CHARS); `_pack_items_by_budget` only splits into multiple messages
+if the combined digest would actually exceed that (not expected at this watchlist's size). A
+quiet day with zero items still sends a plain "특이 뉴스 없음" message.
 
 Runs on a daily schedule regardless of weekday/holiday (see .github/workflows/kr-watchlist-news.yml,
 scheduled ~05:50 KST to leave margin for GitHub Actions' own `schedule`-trigger queuing delay
@@ -48,25 +49,13 @@ from pathlib import Path
 
 from claude_cli import ClaudeCliError, run_claude
 from dedup_guard import already_dispatched_today
-from kakao_client import (
-    KakaoAuthError,
-    KakaoSendError,
-    build_redirect_link,
-    get_access_token,
-    send_kakao_list_message,
-    send_kakao_message,
-    send_text,
-)
+from telegram_client import MAX_MESSAGE_CHARS, TelegramAuthError, TelegramSendError, send_text
 
 WORKFLOW_FILE = "kr-watchlist-news.yml"
 
 WATCHLIST_PATH = Path(__file__).resolve().parent.parent / "watchlist.json"
 KST = timezone(timedelta(hours=9))
 NONE_SENTINEL = "NONE"
-LIST_CHUNK_MAX = 3  # Kakao "list" template supports 2-3 content items per message, never 1
-LIST_CHUNK_MIN = 2
-BUTTON_TITLE = "알림 봇 정보"  # relabels Kakao's un-removable default button (still opens
-# header_link_url, i.e. this repo) so it doesn't read like a link to the article itself
 
 
 def lookback_hours_for(now_kst: datetime) -> int:
@@ -127,22 +116,33 @@ def retry_stock_strict(symbol: str, name: str, now_kst: datetime) -> str:
     return run_claude(prompt) or NONE_SENTINEL
 
 
-def chunk_for_kakao_list(items: list) -> list[list]:
-    """Splits into groups of LIST_CHUNK_MIN..LIST_CHUNK_MAX -- Kakao's list template rejects a
-    group of 1 (confirmed via official docs: "2개 이상 필수, 최대 3개"), so a naive fixed-size
-    chunk (e.g. 4 items -> [3, 1]) would make the last message fail to send. Instead this borrows
-    one item back from the last full group whenever the remainder would be exactly 1 (e.g. 4 ->
-    [2, 2], 7 -> [3, 2, 2])."""
-    n = len(items)
-    chunks = []
-    i = 0
-    while n - i > LIST_CHUNK_MAX:
-        size = LIST_CHUNK_MAX - 1 if (n - i - LIST_CHUNK_MAX) == 1 else LIST_CHUNK_MAX
-        chunks.append(items[i : i + size])
-        i += size
-    if n - i > 0:
-        chunks.append(items[i:])
-    return chunks
+def _digest_block(item: dict) -> str:
+    lines = [item["title"], item["fact"]]
+    if item["insight"]:
+        lines.append(f"↳ {item['insight']}")
+    lines.append(item["link_url"])
+    return "\n".join(lines)
+
+
+def _pack_items_by_budget(items: list, header: str) -> list[list]:
+    """Groups stock items into as few messages as possible while keeping each rendered message
+    under MAX_MESSAGE_CHARS. Unlike Kakao's list template (2-3 items, never 1), Telegram has no
+    item-count constraint -- this is a plain cumulative-length pack, not expected to ever split
+    at this watchlist's size (8 stocks x ~150 chars is well under the 4096 budget)."""
+    groups: list[list] = []
+    current: list = []
+    current_len = len(header)
+    for item in items:
+        block_len = len(_digest_block(item)) + 2  # +2 for the blank-line separator
+        if current and current_len + block_len > MAX_MESSAGE_CHARS:
+            groups.append(current)
+            current = []
+            current_len = len(header)
+        current.append(item)
+        current_len += block_len
+    if current:
+        groups.append(current)
+    return groups
 
 
 def _log_raw(symbol: str, name: str, raw: str) -> None:
@@ -163,10 +163,9 @@ def _has_hangul(text: str) -> bool:
 
 def parse_verdict_line(raw: str) -> tuple[int | None, int | None, int | None, str, str, str, str] | None:
     """Returns (good_count, bad_count, neutral_count, fact, insight, verdict, url), or None if the
-    stock had no material news, no confirmed article URL (an item without a real URL can't go
-    into the Kakao list template, so it's dropped rather than sent unlinked or with a guessed
-    link), or the summary came back without any Korean (English-only -> None so the caller's
-    strict retry kicks in).
+    stock had no material news, no confirmed article URL (an item without a real URL is dropped
+    rather than sent unlinked or with a guessed link), or the summary came back without any
+    Korean (English-only -> None so the caller's strict retry kicks in).
 
     Format is '<good>|<bad>|<neutral>|<fact>|<insight>|<verdict>|<url>' (2026-09-23: added the
     3 leading counts so the digest can show how many 호재/부정/중립 articles were actually found,
@@ -270,11 +269,8 @@ def main() -> int:
             print(f"SKIP {symbol} {name}: 특이 뉴스 없음 (또는 URL 미확보)")
             continue
         good, bad, neutral, fact, insight, verdict, url = parsed
-        # 2026-09-11: verdict는 description 끝이 아니라 title에 둔다 -- list 템플릿은
-        # title+description 합쳐 4줄까지만 보여 description 끝의 태그가 잘렸었다.
         # 2026-09-23: 개수(good/bad/neutral)를 구했으면 제목에 이모지로 압축해 호재/부정/중립
-        # 검색 건수를 함께 보여준다 -- description(90자) 예산은 건드리지 않아 짤림 문제를
-        # 악화시키지 않는다. 구 포맷 응답(개수 없음)은 기존 [verdict] 태그로 자연 폴백.
+        # 검색 건수를 함께 보여준다. 구 포맷 응답(개수 없음)은 기존 [verdict] 태그로 자연 폴백.
         if good is not None:
             title = (
                 f"{VERDICT_EMOJI[verdict]} {name} "
@@ -285,11 +281,10 @@ def main() -> int:
         items.append(
             {
                 "title": title,
-                "description": f"{fact}\n↳ {insight}" if insight else fact,
                 "fact": fact,
                 "insight": insight,
                 "verdict": verdict,
-                "link_url": build_redirect_link(url),
+                "link_url": url,
             }
         )
         print(f"OK  {symbol} {name}: {verdict} (호재{good} 부정{bad} 중립{neutral}) url={url}")
@@ -297,35 +292,26 @@ def main() -> int:
     base_header = f"[관심종목 뉴스 {now_kst.strftime('%m/%d')}]"
     try:
         if not items:
-            send_kakao_message(f"{base_header}\n특이 뉴스 없음")
-        elif len(items) == 1:
-            # Kakao's list template rejects a single content item -- fall back to the text
-            # template, which still carries the one article's own link.
-            only = items[0]
-            send_text(
-                get_access_token(),
-                f"{base_header}\n{only['title']}: {only['description']}",
-                link_url=only["link_url"],
-            )
+            send_text(f"{base_header}\n특이 뉴스 없음")
         else:
-            chunks = chunk_for_kakao_list(items)
-            for idx, chunk in enumerate(chunks, start=1):
-                header = base_header if len(chunks) == 1 else f"{base_header} ({idx}/{len(chunks)})"
-                send_kakao_list_message(header, chunk, button_title=BUTTON_TITLE)
-    except (KakaoAuthError, KakaoSendError) as exc:
-        print(f"FAIL(kakao) 다이제스트 발송 실패: {exc}", file=sys.stderr)
+            groups = _pack_items_by_budget(items, base_header)
+            for idx, group in enumerate(groups, start=1):
+                header = base_header if len(groups) == 1 else f"{base_header} ({idx}/{len(groups)})"
+                send_text("\n\n".join([header] + [_digest_block(item) for item in group]))
+    except (TelegramAuthError, TelegramSendError) as exc:
+        print(f"FAIL(telegram) 다이제스트 발송 실패: {exc}", file=sys.stderr)
         return 1
 
     if failures:
         print(f"{len(failures)}/{len(stocks)}건 조회 실패(다이제스트에서 누락됨): {failures}", file=sys.stderr)
         if not items:
-            # 성공한 종목이 하나도 없다 -- 카카오 발송 자체가 사실상 빈 메시지였을 것이므로
-            # 진짜 실패로 취급한다.
+            # 성공한 종목이 하나도 없다 -- 발송 자체가 사실상 빈 메시지였을 것이므로 진짜
+            # 실패로 취급한다.
             return 1
         # 2026-09-11 사용자 리포트: 일부 종목 조회만 실패해도 매번 워크플로가 "Failed"로 끝나
-        # GitHub Actions가 매일 실패 메일을 보냈다 -- 정작 카카오 다이제스트는 성공한 종목만
-        # 모아 정상 발송됐는데도 매번 거짓 실패 알림이 온 것. 실패 종목은 위 로그에 이미
-        # 남겼으니(진단 가능) 부분 실패로 전체 워크플로를 실패 처리하지 않는다.
+        # GitHub Actions가 매일 실패 메일을 보냈다 -- 정작 다이제스트는 성공한 종목만 모아
+        # 정상 발송됐는데도 매번 거짓 실패 알림이 온 것. 실패 종목은 위 로그에 이미 남겼으니
+        # (진단 가능) 부분 실패로 전체 워크플로를 실패 처리하지 않는다.
     return 0
 
 

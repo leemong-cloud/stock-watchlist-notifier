@@ -1,15 +1,15 @@
-"""One-off urgent KakaoTalk alert -- no news search, no LLM, just a plain "send to me" memo.
+"""One-off urgent Telegram alert -- no news search, no LLM, just a plain text message.
 
 Companion to notify_kr_watchlist.py's daily digest but deliberately much lighter: the opencode
 project's /watch-portfolio near-real-time monitoring loop (2026-09-22) dispatches this via
 `gh workflow run urgent-alert.yml -f message="..."` the moment it detects a volume/price anomaly
-on a holding, and needs the KakaoTalk message to land in seconds, not the minutes a per-stock
-WebSearch pass would take. Reuses kakao_client.py's existing OAuth plumbing (KAKAO_REST_API_KEY /
-KAKAO_REFRESH_TOKEN secrets, already verified live by the daily digest job) -- no new credentials.
+on a holding, and needs the Telegram message to land in seconds, not the minutes a per-stock
+WebSearch pass would take. Reuses telegram_client.py's existing credentials (TELEGRAM_BOT_TOKEN /
+TELEGRAM_CHAT_ID secrets, already verified live by the daily digest job) -- no new credentials.
 
-Message text is passed straight through to Kakao's "text" template (send_kakao_message), which
-already truncates to MAX_MESSAGE_CHARS with a sentence-boundary-aware trim (kakao_client.py) --
-the caller does not need to pre-truncate.
+Message text is passed straight through to telegram_client.send_text, which already truncates to
+MAX_MESSAGE_CHARS (4096) with a sentence-boundary-aware trim -- the caller does not need to
+pre-truncate.
 
 CLI/env:
     ALERT_MESSAGE env var (set by the GitHub Actions workflow_dispatch input), or a single CLI
@@ -25,7 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from kakao_client import send_kakao_message
+from telegram_client import send_text
 
 
 def main() -> int:
@@ -37,12 +37,12 @@ def main() -> int:
         return 1
 
     try:
-        send_kakao_message(message)
+        send_text(message)
     except Exception as e:  # noqa: BLE001 -- surface the failure clearly, this is the only step in the job
-        print(f"Kakao send failed: {type(e).__name__}: {e}", file=sys.stderr)
+        print(f"Telegram send failed: {type(e).__name__}: {e}", file=sys.stderr)
         return 1
 
-    print("Kakao urgent alert sent.")
+    print("Telegram urgent alert sent.")
     return 0
 
 
