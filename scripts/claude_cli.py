@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import subprocess
 
-MODEL = "sonnet"  # switched from haiku 2026-09-07: haiku's WebSearch grounding was too weak
+MODEL = "claude-sonnet-5-5"  # pinned (was the floating "sonnet" alias); switched from haiku 2026-09-07: haiku's WebSearch grounding was too weak
 # for material-news detection (8/8 watchlist stocks silently skipped as "no news" on 2026-09-06,
 # with zero visibility into whether that was true or a format/grounding failure -- see the raw
 # per-stock logging added to notify_kr_watchlist.py the same day)
