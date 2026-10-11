@@ -19,7 +19,9 @@ still meant to read as a one-line summary, not a wall of text).
 """
 from __future__ import annotations
 
+import json
 import subprocess
+import sys
 
 MODEL = "claude-sonnet-5-5"  # pinned (was the floating "sonnet" alias); switched from haiku 2026-09-07: haiku's WebSearch grounding was too weak
 # for material-news detection (8/8 watchlist stocks silently skipped as "no news" on 2026-09-06,
@@ -56,7 +58,8 @@ def run_claude(prompt: str) -> str:
                 "--model",
                 MODEL,
                 "--output-format",
-                "text",
+                "stream-json",
+                "--verbose",
                 "--permission-mode",
                 "bypassPermissions",
                 "--allowedTools",
@@ -81,4 +84,33 @@ def run_claude(prompt: str) -> str:
         detail = result.stderr.strip() or result.stdout.strip() or "(stdout/stderr 모두 비어있음)"
         raise ClaudeCliError(f"claude CLI 실패 (exit {result.returncode}): {detail[:500]}")
 
-    return result.stdout.strip()
+    return _parse_stream(result.stdout)
+
+
+def _parse_stream(stdout: str) -> str:
+    """Returns the final answer text from stream-json output and logs which tools ran.
+
+    2026-10-12: 워치리스트 11종목이 전부 NONE으로 왔는데, 로컬 재현에서는 같은 프롬프트가
+    WebSearch ~10회 후 정상 결과를 냈다 -- CI에서 검색이 실제로 돌았는지 최종 답변만으로는
+    알 수 없어, 도구 호출 수와 도구 오류를 stderr 로그에 남긴다(답변 포맷은 text 모드와 동일)."""
+    counts: dict[str, int] = {}
+    tool_errors: list[str] = []
+    final = None
+    for line in stdout.splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        content = (ev.get("message") or {}).get("content")
+        if isinstance(content, list):
+            for c in content:
+                if c.get("type") == "tool_use":
+                    counts[c.get("name", "?")] = counts.get(c.get("name", "?"), 0) + 1
+                elif c.get("type") == "tool_result" and c.get("is_error"):
+                    tool_errors.append(" ".join(str(c.get("content")).split())[:150])
+        if ev.get("type") == "result":
+            final = ev.get("result", "")
+    print(f"TOOLS {counts or '(없음)'} errors={len(tool_errors)} {tool_errors[:2]}", file=sys.stderr)
+    if final is None:
+        raise ClaudeCliError(f"stream-json에서 result 이벤트를 찾지 못했습니다: {stdout[-300:]}")
+    return final.strip()
