@@ -1,50 +1,61 @@
 {
   "asOf": "2026-10-11",
-  "generatedAt": "2026-10-11T15:50:51.747422+09:00",
+  "generatedAt": "2026-10-12T08:11:17.625626+09:00",
   "stocks": [
     {
       "symbol": "035900",
-      "name": "JYP Ent."
+      "name": "JYP Ent.",
+      "sector": "엔터·K팝"
     },
     {
       "symbol": "079550",
-      "name": "LIG디펜스앤에어로스페이스"
+      "name": "LIG디펜스앤에어로스페이스",
+      "sector": "방산"
     },
     {
       "symbol": "100090",
-      "name": "SK오션플랜트"
+      "name": "SK오션플랜트",
+      "sector": "해상풍력·조선기자재"
     },
     {
       "symbol": "047040",
-      "name": "대우건설"
+      "name": "대우건설",
+      "sector": "건설"
     },
     {
       "symbol": "328130",
-      "name": "루닛"
+      "name": "루닛",
+      "sector": "의료AI"
     },
     {
       "symbol": "005930",
-      "name": "삼성전자"
+      "name": "삼성전자",
+      "sector": "반도체"
     },
     {
       "symbol": "068270",
-      "name": "셀트리온"
+      "name": "셀트리온",
+      "sector": "바이오시밀러·제약바이오"
     },
     {
       "symbol": "215600",
-      "name": "신라젠"
+      "name": "신라젠",
+      "sector": "신약개발·항암제"
     },
     {
       "symbol": "257720",
-      "name": "실리콘투"
+      "name": "실리콘투",
+      "sector": "화장품·K뷰티"
     },
     {
       "symbol": "161890",
-      "name": "한국콜마"
+      "name": "한국콜마",
+      "sector": "화장품·K뷰티"
     },
     {
       "symbol": "005380",
-      "name": "현대차"
+      "name": "현대차",
+      "sector": "자동차"
     }
   ]
 }
