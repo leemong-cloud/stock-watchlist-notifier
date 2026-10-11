@@ -49,6 +49,7 @@ from pathlib import Path
 
 from claude_cli import ClaudeCliError, run_claude
 from dedup_guard import already_dispatched_today
+from naver_feed import fetch_recent, format_candidates
 from telegram_client import MAX_MESSAGE_CHARS, TelegramAuthError, TelegramSendError, send_text
 
 WORKFLOW_FILE = "kr-watchlist-news.yml"
@@ -90,7 +91,22 @@ def _window_note(now_kst: datetime) -> str:
     )
 
 
-def _build_stock_prompt(symbol: str, name: str, now_kst: datetime) -> str:
+def _candidate_block(name: str, candidates: list[dict]) -> str:
+    """네이버 종목 뉴스 피드 후보를 프롬프트에 넣는 블록. 후보가 없으면 ''(프롬프트는 이전과 동일)."""
+    if not candidates:
+        return ""
+    return (
+        "아래는 네이버 증권 종목 뉴스 피드의 최신순 후보 기사 목록이다(이 종목이 본문에 언급된 "
+        "업종·테마 기사도 섞여 있다). 웹 검색 결과와 함께 이 목록도 후보로 평가해라. 목록의 기사를 "
+        "대표로 고르면 목록의 URL을 그대로 써도 된다(웹 검색으로 다시 찾을 필요 없음).\n"
+        f"{format_candidates(candidates)}\n"
+        f"제목에 {name}이 없는 업종·테마 기사는 '본문 언급' 문장이 주가·실적 맥락으로 {name}을 구체적으로 "
+        "다룰 때만 후보에 포함하고, 그런 기사를 대표로 고르면 사실 칸 맨 앞에 '(업종) '을 붙여라"
+        "(이 4자는 글자 수에 포함하지 않는다). 단순히 이름이 열거만 된 기사는 제외한다.\n"
+    )
+
+
+def _build_stock_prompt(symbol: str, name: str, now_kst: datetime, candidates: list[dict] | None = None) -> str:
     window_note = _window_note(now_kst)
     return (
         f"지금은 {now_kst.strftime('%Y-%m-%d %H:%M')} (한국시간, {['월','화','수','목','금','토','일'][now_kst.weekday()]}요일) 기준이야. "
@@ -104,6 +120,7 @@ def _build_stock_prompt(symbol: str, name: str, now_kst: datetime) -> str:
         "간접적이고 해석 여지가 있는 뉴스보다 우선해라. 단순히 먼저 검색된 기사나 가장 이른 "
         "시각에 발행된 기사를 그대로 대표로 고르지 마라 -- 반드시 투자자 임팩트 기준으로 "
         "재평가해라. 임팩트가 비슷하면 더 최근 기사를 우선해라. "
+        + _candidate_block(name, candidates or [])
         + _ANSWER_FORMAT
     )
 
@@ -127,16 +144,16 @@ def _build_sector_prompt(sector: str, names: list[str], now_kst: datetime) -> st
     )
 
 
-def summarize_stock(symbol: str, name: str, now_kst: datetime) -> str:
-    return run_claude(_build_stock_prompt(symbol, name, now_kst)) or NONE_SENTINEL
+def summarize_stock(symbol: str, name: str, now_kst: datetime, candidates: list[dict] | None = None) -> str:
+    return run_claude(_build_stock_prompt(symbol, name, now_kst, candidates)) or NONE_SENTINEL
 
 
-def retry_stock_strict(symbol: str, name: str, now_kst: datetime) -> str:
+def retry_stock_strict(symbol: str, name: str, now_kst: datetime, candidates: list[dict] | None = None) -> str:
     """Re-asks with an added strict-format reminder -- used only when the first response wasn't a
     clean NONE_SENTINEL match but also didn't parse as 3 valid pipe-separated fields, i.e. the
     model most likely had real news but drifted from the required format (2026-09-08: this was
     silently dropping stocks like a format violation would look identical to genuine "no news")."""
-    prompt = _build_stock_prompt(symbol, name, now_kst) + (
+    prompt = _build_stock_prompt(symbol, name, now_kst, candidates) + (
         " 방금 전 답변 형식이 올바르지 않았어. 다시 답할 때는 절대 다른 말을 덧붙이지 말고 "
         "정확히 '<호재수>|<부정수>|<중립수>|<사실>|<해석>|<판정>|<URL>' 한 줄만(한국어), "
         f"또는 뉴스가 없으면 정확히 '{NONE_SENTINEL}' 한 단어만 출력해."
@@ -308,8 +325,9 @@ def main() -> int:
     none_stocks = []  # 직접 뉴스가 없던 종목 -> 아래에서 업종 기사로 보완
     for stock in stocks:
         symbol, name = stock["symbol"], stock["name"]
+        cands = fetch_recent(symbol, name, now_kst, lookback_hours_for(now_kst))
         try:
-            raw = summarize_stock(symbol, name, now_kst)
+            raw = summarize_stock(symbol, name, now_kst, cands)
         except ClaudeCliError as exc:
             # 2026-09-08~11 실전 로그에서 반복 확인: 8종목을 연속 호출하다 보면 뒤쪽 2~5종목이
             # exit 1(빈 stderr, 즉시 실패) 또는 180초 타임아웃으로 한꺼번에 무너지는 패턴이
@@ -319,7 +337,7 @@ def main() -> int:
             print(f"RETRY(claude) {symbol} {name}: 20초 대기 후 1회 재시도", file=sys.stderr)
             time.sleep(20)
             try:
-                raw = summarize_stock(symbol, name, now_kst)
+                raw = summarize_stock(symbol, name, now_kst, cands)
             except ClaudeCliError as exc2:
                 print(f"FAIL(claude-2nd) {symbol} {name}: {exc2}", file=sys.stderr)
                 failures.append(symbol)
@@ -332,7 +350,7 @@ def main() -> int:
             # Didn't parse but also wasn't an honest "no news" -- likely a format slip rather
             # than a real absence of news, so give the model one more chance before giving up.
             try:
-                retry_raw = retry_stock_strict(symbol, name, now_kst)
+                retry_raw = retry_stock_strict(symbol, name, now_kst, cands)
             except ClaudeCliError as exc:
                 print(f"FAIL(claude-retry) {symbol} {name}: {exc}", file=sys.stderr)
                 retry_raw = ""
