@@ -66,13 +66,32 @@ def lookback_hours_for(now_kst: datetime) -> int:
     return 72 if now_kst.weekday() == 0 else 24
 
 
-def _build_stock_prompt(symbol: str, name: str, now_kst: datetime) -> str:
+_ANSWER_FORMAT = (
+    "투자자에게 중요한 뉴스가 하나라도 있으면 다른 말 없이 정확히 이 형식으로만 답해: "
+    "<호재로 분류한 기사 개수(숫자만)>|<부정으로 분류한 기사 개수(숫자만)>|<중립으로 분류한 "
+    "기사 개수(숫자만)>|<사실: 대표 기사에서 무슨 일이 있었는지 완결된 한 문장, 25자 이내, "
+    "꼭 필요한 숫자 1개 정도만>|<해석: 그게 투자자에게 왜 중요한지/어떤 영향인지 완결된 한 문장, "
+    "45자 이내>|<대표 기사의 호재 또는 부정 또는 중립 중 하나>|<대표 기사의 정확한 URL(마크다운 "
+    "링크 문법 금지, 순수 URL 문자열만)>. "
+    "사실·해석은 반드시 한국어로 써라. 외신·영문 기사도 한국어로 번역해서 요약하고, 영어 문장이나 "
+    "영어 기사 제목을 그대로 쓰지 마라(회사명·티커 제외). 각 문장은 글자 수 안에서 끝까지 완결해야 한다. "
+    "URL은 웹 검색으로 실제 확인한 대표 기사의 링크여야 하며 절대 추측하거나 지어내지 마라. "
+    f"확인된 중요 뉴스가 없거나, 있어도 확실한 원문 URL을 확인 못 했으면 절대 추측하지 말고 "
+    f"정확히 '{NONE_SENTINEL}'이라고만 답해."
+)
+
+
+def _window_note(now_kst: datetime) -> str:
     hours = lookback_hours_for(now_kst)
-    window_note = (
+    return (
         f"오늘이 월요일이라 주말 동안 나온 뉴스까지 포함해서 지난 {hours}시간(주말 포함) 이내"
         if hours != 24
         else f"지난 {hours}시간 이내"
     )
+
+
+def _build_stock_prompt(symbol: str, name: str, now_kst: datetime) -> str:
+    window_note = _window_note(now_kst)
     return (
         f"지금은 {now_kst.strftime('%Y-%m-%d %H:%M')} (한국시간, {['월','화','수','목','금','토','일'][now_kst.weekday()]}요일) 기준이야. "
         f"{name}({symbol}) 관련, 이 시점으로부터 {window_note}에 나온 국내 뉴스와 해외(외신) "
@@ -85,17 +104,26 @@ def _build_stock_prompt(symbol: str, name: str, now_kst: datetime) -> str:
         "간접적이고 해석 여지가 있는 뉴스보다 우선해라. 단순히 먼저 검색된 기사나 가장 이른 "
         "시각에 발행된 기사를 그대로 대표로 고르지 마라 -- 반드시 투자자 임팩트 기준으로 "
         "재평가해라. 임팩트가 비슷하면 더 최근 기사를 우선해라. "
-        "투자자에게 중요한 뉴스가 하나라도 있으면 다른 말 없이 정확히 이 형식으로만 답해: "
-        "<호재로 분류한 기사 개수(숫자만)>|<부정으로 분류한 기사 개수(숫자만)>|<중립으로 분류한 "
-        "기사 개수(숫자만)>|<사실: 대표 기사에서 무슨 일이 있었는지 완결된 한 문장, 25자 이내, "
-        "꼭 필요한 숫자 1개 정도만>|<해석: 그게 투자자에게 왜 중요한지/어떤 영향인지 완결된 한 문장, "
-        "45자 이내>|<대표 기사의 호재 또는 부정 또는 중립 중 하나>|<대표 기사의 정확한 URL(마크다운 "
-        "링크 문법 금지, 순수 URL 문자열만)>. "
-        "사실·해석은 반드시 한국어로 써라. 외신·영문 기사도 한국어로 번역해서 요약하고, 영어 문장이나 "
-        "영어 기사 제목을 그대로 쓰지 마라(회사명·티커 제외). 각 문장은 글자 수 안에서 끝까지 완결해야 한다. "
-        "URL은 웹 검색으로 실제 확인한 대표 기사의 링크여야 하며 절대 추측하거나 지어내지 마라. "
-        f"확인된 중요 뉴스가 없거나, 있어도 확실한 원문 URL을 확인 못 했으면 절대 추측하지 말고 "
-        f"정확히 '{NONE_SENTINEL}'이라고만 답해."
+        + _ANSWER_FORMAT
+    )
+
+
+def _build_sector_prompt(sector: str, names: list[str], now_kst: datetime) -> str:
+    """2026-10-12: 종목명 검색만으로는 업종 기사 안의 한 문장 언급(한국콜마 등)이 안 잡혀, 종목별 조회에서
+    NONE이 나온 종목들의 업종을 따로 한 번 조회한다. 검색어에 종목명을 섞으면 종목 페이지로 쏠려
+    업종 기사가 묻히므로 업종 키워드만 쓰게 한다."""
+    joined = ", ".join(names)
+    return (
+        f"지금은 {now_kst.strftime('%Y-%m-%d %H:%M')} (한국시간, {['월','화','수','목','금','토','일'][now_kst.weekday()]}요일) 기준이야. "
+        f"'{sector}' 업종·테마와 관련해, 이 시점으로부터 {_window_note(now_kst)}에 나온 국내 뉴스와 "
+        "해외(외신) 뉴스를 웹 검색으로 확인해줘. 검색어에는 종목명을 넣지 말고 업종·테마 키워드만 "
+        "써서(예: '화장품주 하락 증권가', 'K뷰티 화장품 수출') 서로 다른 검색어로 최소 2회 이상 "
+        "검색해 후보 기사를 여러 건 모아라. 모은 기사들을 각각 호재/부정/중립으로 분류하고 각 개수를 세어라. "
+        f"대표 기사 1건은 다음 종목({joined}) 중 하나 이상이 본문에서 주가·실적 수치나 평가와 함께 "
+        "구체적으로 언급된 기사를 최우선으로 고르고, 그런 기사가 없으면 업종 전체 흐름에 가장 큰 "
+        "영향을 주는 기사(정책·규제, 수출입 통계, 업종 실적 등)를 골라라. "
+        f"해석 칸에는 그 업종 흐름이 {joined}에 주는 의미를 써라. "
+        + _ANSWER_FORMAT
     )
 
 
@@ -203,6 +231,51 @@ def parse_verdict_line(raw: str) -> tuple[int | None, int | None, int | None, st
     return good, bad, neutral, fact, insight, verdict, url
 
 
+def _title(verdict: str, label: str, good, bad, neutral) -> str:
+    if good is None:  # 구 포맷 응답(개수 없음)은 [verdict] 태그로 폴백
+        return f"{VERDICT_EMOJI[verdict]} {label} [{verdict}]"
+    return f"{VERDICT_EMOJI[verdict]} {label} {VERDICT_EMOJI['호재']}{good}{VERDICT_EMOJI['부정']}{bad}{VERDICT_EMOJI['중립']}{neutral}"
+
+
+def sector_items(none_stocks: list[dict], now_kst: datetime, seen_urls: set[str]) -> list[dict]:
+    """종목 직접 뉴스가 없던(NONE) 종목들을 업종별로 묶어 업종당 1회 조회 -> '🏷️[업종]' 표시 항목.
+    업종은 watchlist.json 항목의 "sector"(combined가 push 때 채움). 없으면 건너뛰고(로그),
+    조회 실패는 다이제스트를 막지 않는다."""
+    groups: dict[str, list[str]] = {}
+    for s in none_stocks:
+        sector = s.get("sector")
+        if not sector:
+            print(f"SECTOR-MISSING {s['symbol']} {s['name']}: watchlist.json에 sector 없음", file=sys.stderr)
+            continue
+        groups.setdefault(sector, []).append(s["name"])
+
+    items = []
+    for sector, names in groups.items():
+        try:
+            raw = run_claude(_build_sector_prompt(sector, names, now_kst)) or NONE_SENTINEL
+        except ClaudeCliError as exc:
+            print(f"FAIL(sector) {sector}: {exc}", file=sys.stderr)
+            continue
+        _log_raw(f"[업종:{sector}]", ",".join(names), raw)
+        parsed = parse_verdict_line(raw)
+        if parsed is None or parsed[6] in seen_urls:
+            print(f"SKIP [업종:{sector}] {','.join(names)}: 업종 기사 없음 (또는 URL 미확보/중복)")
+            continue
+        good, bad, neutral, fact, insight, verdict, url = parsed
+        seen_urls.add(url)
+        items.append(
+            {
+                "title": _title(verdict, f"🏷️[업종] {sector} ({', '.join(names)})", good, bad, neutral),
+                "fact": fact,
+                "insight": insight,
+                "verdict": verdict,
+                "link_url": url,
+            }
+        )
+        print(f"OK  [업종:{sector}] {','.join(names)}: {verdict} url={url}")
+    return items
+
+
 def main() -> int:
     if not WATCHLIST_PATH.exists():
         print(f"watchlist.json이 없습니다: {WATCHLIST_PATH}", file=sys.stderr)
@@ -232,6 +305,7 @@ def main() -> int:
 
     items = []
     failures = []
+    none_stocks = []  # 직접 뉴스가 없던 종목 -> 아래에서 업종 기사로 보완
     for stock in stocks:
         symbol, name = stock["symbol"], stock["name"]
         try:
@@ -267,20 +341,14 @@ def main() -> int:
                 parsed = parse_verdict_line(retry_raw)
         if parsed is None:
             print(f"SKIP {symbol} {name}: 특이 뉴스 없음 (또는 URL 미확보)")
+            none_stocks.append(stock)
             continue
         good, bad, neutral, fact, insight, verdict, url = parsed
         # 2026-09-23: 개수(good/bad/neutral)를 구했으면 제목에 이모지로 압축해 호재/부정/중립
         # 검색 건수를 함께 보여준다. 구 포맷 응답(개수 없음)은 기존 [verdict] 태그로 자연 폴백.
-        if good is not None:
-            title = (
-                f"{VERDICT_EMOJI[verdict]} {name} "
-                f"{VERDICT_EMOJI['호재']}{good}{VERDICT_EMOJI['부정']}{bad}{VERDICT_EMOJI['중립']}{neutral}"
-            )
-        else:
-            title = f"{VERDICT_EMOJI[verdict]} {name} [{verdict}]"
         items.append(
             {
-                "title": title,
+                "title": _title(verdict, name, good, bad, neutral),
                 "fact": fact,
                 "insight": insight,
                 "verdict": verdict,
@@ -288,6 +356,9 @@ def main() -> int:
             }
         )
         print(f"OK  {symbol} {name}: {verdict} (호재{good} 부정{bad} 중립{neutral}) url={url}")
+
+    if none_stocks:
+        items += sector_items(none_stocks, now_kst, {i["link_url"] for i in items})
 
     base_header = f"[관심종목 뉴스 {now_kst.strftime('%m/%d')}]"
     try:
