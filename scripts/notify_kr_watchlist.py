@@ -49,7 +49,7 @@ from pathlib import Path
 
 from claude_cli import ClaudeCliError, run_claude
 from dedup_guard import already_dispatched_today
-from naver_feed import fetch_recent, format_candidates
+from naver_feed import feed_warning, fetch_recent, format_candidates
 from telegram_client import MAX_MESSAGE_CHARS, TelegramAuthError, TelegramSendError, send_text
 
 WORKFLOW_FILE = "kr-watchlist-news.yml"
@@ -323,9 +323,13 @@ def main() -> int:
     items = []
     failures = []
     none_stocks = []  # 직접 뉴스가 없던 종목 -> 아래에서 업종 기사로 보완
+    feed_failed = []  # 네이버 피드 조회에 실패한 종목
     for stock in stocks:
         symbol, name = stock["symbol"], stock["name"]
         cands = fetch_recent(symbol, name, now_kst, lookback_hours_for(now_kst))
+        if cands is None:  # 피드 조회 실패 -> 웹 검색만으로 진행하고 다이제스트에 경고를 붙인다
+            feed_failed.append(symbol)
+            cands = []
         try:
             raw = summarize_stock(symbol, name, now_kst, cands)
         except ClaudeCliError as exc:
@@ -379,14 +383,16 @@ def main() -> int:
         items += sector_items(none_stocks, now_kst, {i["link_url"] for i in items})
 
     base_header = f"[관심종목 뉴스 {now_kst.strftime('%m/%d')}]"
+    warn = [w] if (w := feed_warning(feed_failed, len(stocks))) else []
     try:
         if not items:
-            send_text(f"{base_header}\n특이 뉴스 없음")
+            send_text("\n".join([f"{base_header}\n특이 뉴스 없음"] + warn))
         else:
             groups = _pack_items_by_budget(items, base_header)
             for idx, group in enumerate(groups, start=1):
                 header = base_header if len(groups) == 1 else f"{base_header} ({idx}/{len(groups)})"
-                send_text("\n\n".join([header] + [_digest_block(item) for item in group]))
+                # 경고 한 줄(~100자)은 4096자 예산 대비 작아 첫 메시지에만 붙이고 별도 계산하지 않는다
+                send_text("\n\n".join([header] + [_digest_block(item) for item in group] + (warn if idx == 1 else [])))
     except (TelegramAuthError, TelegramSendError) as exc:
         print(f"FAIL(telegram) 다이제스트 발송 실패: {exc}", file=sys.stderr)
         return 1

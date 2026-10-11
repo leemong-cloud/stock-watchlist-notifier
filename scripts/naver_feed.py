@@ -70,14 +70,15 @@ def mention_sentence(article_html: str, name: str) -> str:
     return ""
 
 
-def fetch_recent(symbol: str, name: str, now_kst: datetime, hours: int) -> list[dict]:
-    """종목의 윈도 내 최신 기사 후보. 실패하면 []. 제목에 종목명이 없는 상위 후보는 본문 언급 문장을 붙인다."""
+def fetch_recent(symbol: str, name: str, now_kst: datetime, hours: int) -> list[dict] | None:
+    """종목의 윈도 내 최신 기사 후보. 조회·해석 실패는 None(기사가 정말 없으면 []) — 호출 쪽이 실패를
+    알림으로 알릴 수 있게 구분한다. 제목에 종목명이 없는 상위 후보는 본문 언급 문장을 붙인다."""
     try:
         groups = _get(FEED_URL.format(code=symbol), params={"pageSize": 30, "page": 1}).json()
         cands = parse_feed(groups, now_kst, hours)
     except (requests.RequestException, ValueError, AttributeError, TypeError) as exc:
         print(f"NAVER-FEED fail {symbol} {name}: {exc!r}"[:300], file=sys.stderr)
-        return []
+        return None
     print(f"FEED {symbol} {name}: in-window={len(cands)}", file=sys.stderr)
 
     fetched = 0
@@ -92,6 +93,15 @@ def fetch_recent(symbol: str, name: str, now_kst: datetime, hours: int) -> list[
         except requests.RequestException:
             c["mention"] = ""
     return cands
+
+
+def feed_warning(failed: list[str], total: int) -> str:
+    """피드 조회에 실패한 종목이 있으면 텔레그램 다이제스트에 붙일 경고 한 줄('' = 경고 없음).
+    비공식 API라 형식 변경·차단이 조용히 일어날 수 있어, 그때 사용자가 바로 알아야 한다."""
+    if not failed:
+        return ""
+    who = "전체" if len(failed) == total else f"{len(failed)}/{total}종목"
+    return f"⚠️ 네이버 뉴스 피드 조회 실패({who}) — 해당 종목은 웹 검색만으로 확인해 최신 기사가 빠졌을 수 있음"
 
 
 def format_candidates(cands: list[dict]) -> str:
@@ -109,4 +119,4 @@ def format_candidates(cands: list[dict]) -> str:
 if __name__ == "__main__":  # 수동 확인: python scripts/naver_feed.py 161890 한국콜마
     code, nm = sys.argv[1], sys.argv[2]
     got = fetch_recent(code, nm, datetime.now(KST), 72)
-    print(format_candidates(got) or "(후보 없음)")
+    print("(조회 실패)" if got is None else format_candidates(got) or "(후보 없음)")
