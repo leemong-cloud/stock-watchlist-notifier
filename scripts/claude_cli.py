@@ -82,7 +82,9 @@ def run_claude(prompt: str) -> str:
         # (GitHub Actions 로그 실측) -- stdout도 함께 봐야 실제 원인(레이트리밋/사용량 한도 등)을
         # 진단할 수 있어 둘 다 담는다.
         detail = result.stderr.strip() or result.stdout.strip() or "(stdout/stderr 모두 비어있음)"
-        raise ClaudeCliError(f"claude CLI 실패 (exit {result.returncode}): {detail[:500]}")
+        # 2026-11-14: [:500](앞부분)은 init 이벤트 JSON만 담고 잘려서 실제 에러(마지막 result
+        # 이벤트: 인증 오류 등)가 로그에 안 보였음 -> 끝 500자를 남긴다.
+        raise ClaudeCliError(f"claude CLI 실패 (exit {result.returncode}): {detail[-500:]}")
 
     return _parse_stream(result.stdout)
 
